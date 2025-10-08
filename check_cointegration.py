@@ -1,34 +1,24 @@
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-from statsmodels.tsa.stattools import coint, adfuller
+from statsmodels.tsa.stattools import adfuller
 import warnings
 
 warnings.filterwarnings("ignore")
 import matplotlib.pyplot as plt
 
-# Global variables
-df = None
-df_log = None
-adf_results = None
-cointegrated_pairs = None
-
 # Load and prepare data
 def load_data(csv_path="indices_eur.csv"):
-    global df, df_log
     df = pd.read_csv(csv_path)
     df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
     df.set_index(df.columns[0], inplace=True)
     df_log = np.log(df)
-    
     print(f"Date range: {df.index.min()} to {df.index.max()}")
     print(f"Indices: {list(df.columns)}")
     return df, df_log
 
 # Plot indices
-def plot_indices(df_to_plot=None):
-    if df_to_plot is None:
-        df_to_plot = df
+def plot_indices(df_to_plot):
     n_indices = len(df_to_plot.columns)
     fig, axes = plt.subplots(n_indices, 1, figsize=(15, 3*n_indices))
 
@@ -43,11 +33,7 @@ def plot_indices(df_to_plot=None):
     plt.show()
 
 # Test unit roots
-def test_unit_roots(log_data=None):
-    global adf_results
-    if log_data is None:
-        log_data = df_log
-    
+def test_unit_roots(log_data):
     results = []
     for col in log_data.columns:
         adf_stat, p_value, _, _, _, _ = adfuller(log_data[col].dropna())
@@ -57,27 +43,16 @@ def test_unit_roots(log_data=None):
             'p_value': round(p_value, 4),
             'Is_Stationary': is_stationary
         })
-    
     adf_results = pd.DataFrame(results)
     stationary = adf_results[adf_results['Is_Stationary'] == True]['Index'].tolist()
     non_stationary = adf_results[adf_results['Is_Stationary'] == False]['Index'].tolist()
     
     print(f"Stationary (I(0)): {len(stationary)} - {stationary}")
     print(f"Non-stationary (I(1)): {len(non_stationary)} - {non_stationary}")
-    
     return adf_results
 
-# Initialize data
-load_data()
-
 # Test cointegration for pairs
-def test_cointegration(log_data=None, adf_data=None):
-    global cointegrated_pairs
-    if log_data is None:
-        log_data = df_log
-    if adf_data is None:
-        adf_data = adf_results
-    
+def test_cointegration(log_data, adf_data):
     # Get non-stationary indices (I(1))
     non_stationary = adf_data[adf_data['Is_Stationary'] == False]['Index'].tolist()
     cointegrated_pairs = []
@@ -130,28 +105,21 @@ def test_cointegration(log_data=None, adf_data=None):
     
     return cointegrated_pairs
 
-# Calculate z-scores and plot spreads
-def analyze_spreads(pairs_data=None, log_data=None, plot_top_n=5):
-    if pairs_data is None:
-        pairs_data = cointegrated_pairs
-    if log_data is None:
-        log_data = df_log
-        
+# Calculate z-scores and plot spreads for all pairs
+def analyze_spreads(pairs_data, log_data):
     if not pairs_data:
         print("No cointegrated pairs to analyze.")
         return
     
     print(f"\nAnalyzing spreads for {len(pairs_data)} cointegrated pairs...")
     
-    # Take top N pairs for plotting
-    top_pairs = pairs_data[:plot_top_n]
-    
     # Plot unnormalized spreads
-    fig, axes = plt.subplots(plot_top_n, 1, figsize=(15, 3*plot_top_n))
-    if plot_top_n == 1:
+    num_plots = len(pairs_data)
+    fig, axes = plt.subplots(num_plots, 1, figsize=(15, 3*num_plots))
+    if num_plots == 1:
         axes = [axes]
     
-    for i, pair in enumerate(top_pairs):
+    for i, pair in enumerate(pairs_data):
         # Extract pair names
         pair_names = pair['Pair'].split(' - ')
         index1, index2 = pair_names[0], pair_names[1]
@@ -181,13 +149,13 @@ def analyze_spreads(pairs_data=None, log_data=None, plot_top_n=5):
     plt.show()
     
     # Calculate and plot normalized spreads (z-scores)
-    fig2, axes2 = plt.subplots(plot_top_n, 1, figsize=(15, 3*plot_top_n))
-    if plot_top_n == 1:
+    fig2, axes2 = plt.subplots(num_plots, 1, figsize=(15, 3*num_plots))
+    if num_plots == 1:
         axes2 = [axes2]
     
-    print(f"\nZ-score analysis for top {plot_top_n} pairs:")
+    print(f"\nZ-score analysis for all {num_plots} pairs:")
     
-    for i, pair in enumerate(top_pairs):
+    for i, pair in enumerate(pairs_data):
         # Extract pair names
         pair_names = pair['Pair'].split(' - ')
         index1, index2 = pair_names[0], pair_names[1]
@@ -224,10 +192,13 @@ def analyze_spreads(pairs_data=None, log_data=None, plot_top_n=5):
     plt.tight_layout()
     plt.show()
 
-# Main execution flow
+def main(csv_path="indices_eur.csv"):
+    df, df_log = load_data(csv_path)
+    plot_indices(df)
+    adf_results = test_unit_roots(df_log)
+    pairs = test_cointegration(df_log, adf_results)
+    analyze_spreads(pairs, df_log)
+
+
 if __name__ == "__main__":
-    # Run all tests
-    plot_indices()
-    test_unit_roots()
-    test_cointegration()
-    analyze_spreads()
+    main()
