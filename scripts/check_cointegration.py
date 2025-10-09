@@ -9,8 +9,69 @@ from datetime import datetime
 warnings.filterwarnings("ignore")
 import matplotlib.pyplot as plt
 
+# Convert Excel to CSV if needed
+def convert_excel_to_csv(excel_path="../data/indices final.xlsx", csv_path="../data/indices_eur.csv"):
+    """
+    Convert Excel file to CSV format.
+    
+    Args:
+        excel_path: Path to the Excel file
+        csv_path: Path for the output CSV file
+    """
+    try:
+        # Check if Excel file exists
+        if not os.path.exists(excel_path):
+            print(f"Excel file not found: {excel_path}")
+            return False
+            
+        # Check if CSV already exists
+        if os.path.exists(csv_path):
+            print(f"CSV file already exists: {csv_path}")
+            return True
+            
+        # Read Excel file and get sheet names
+        excel_file = pd.ExcelFile(excel_path)
+        sheet_names = excel_file.sheet_names
+        
+        print(f"Found {len(sheet_names)} sheets in the Excel file:")
+        for i, sheet_name in enumerate(sheet_names, 1):
+            print(f"  {i}. {sheet_name}")
+        
+        # Find the "Indices in EUR" sheet
+        target_sheet = "Indices in EUR"
+        if target_sheet in sheet_names:
+            sheet_name = target_sheet
+            sheet_index = sheet_names.index(target_sheet) + 1
+            print(f"\nFound '{target_sheet}' sheet (sheet #{sheet_index})")
+        else:
+            print(f"\nError: Sheet '{target_sheet}' not found in the Excel file.")
+            print(f"Available sheets: {sheet_names}")
+            return False
+        
+        # Read the target sheet
+        df = pd.read_excel(excel_path, sheet_name=sheet_name)
+        
+        # Display basic info about the data
+        print(f"\nData shape: {df.shape} (rows x columns)")
+        print(f"Columns: {list(df.columns)}")
+        
+        # Save to CSV
+        df.to_csv(csv_path, index=False)
+        print(f"\nData successfully saved to: {csv_path}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error processing Excel file: {str(e)}")
+        return False
+
 # Load and prepare data
-def load_data(csv_path="../data/indices_eur.csv"):
+def load_data(csv_path="../data/indices_eur.csv", excel_path="../data/indices final.xlsx"):
+    # Convert Excel to CSV if CSV doesn't exist
+    if not os.path.exists(csv_path):
+        print("CSV file not found. Converting Excel to CSV...")
+        convert_excel_to_csv(excel_path, csv_path)
+    
     df = pd.read_csv(csv_path)
     df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
     df.set_index(df.columns[0], inplace=True)
@@ -229,8 +290,8 @@ def analyze_spreads(pairs_data, log_data, save_plots=True):
     
     return z_scores_data
 
-def main(csv_path="../data/indices_eur.csv"):
-    df, df_log = load_data(csv_path)
+def main(csv_path="../data/indices_eur.csv", excel_path="../data/indices final.xlsx"):
+    df, df_log = load_data(csv_path, excel_path)
     plot_indices(df)
     adf_results = test_unit_roots(df_log)
     pairs = test_cointegration(df_log, adf_results)
