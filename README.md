@@ -72,14 +72,6 @@ The analysis generates:
 - `z_scores_YYYYMMDD_HHMMSS.png`: Z-score plots with trading signals
 - `z_scores_YYYYMMDD_HHMMSS.csv`: Z-score data for further analysis
 
-## Testing
-
-Run the test suite:
-
-```bash
-python -m pytest tests/
-```
-
 ## Next Steps
 
 - [ ] Implement signal generation and backtesting
