@@ -198,17 +198,17 @@ def analyze_spreads(pairs_data, log_data, save_plots=True):
     
     for i, pair in enumerate(pairs_data):
         # Extract pair names
-        pair_names = pair['Pair'].split(' - ')
-        index1, index2 = pair_names[0], pair_names[1]
+        pair_names = pair['Pair'].split(' - ') # Split "Index1 - Index2" string into list
+        index1, index2 = pair_names[0], pair_names[1] # Assign first and second index names
         
         # Get data
-        y = log_data[index2].dropna()
-        x = log_data[index1].dropna()
+        y = log_data[index2].dropna() # Get dependent variable (y) and remove missing values
+        x = log_data[index1].dropna() # Get independent variable (x) and remove missing values
         
         # Align data
-        common_index = y.index.intersection(x.index)
-        y = y[common_index]
-        x = x[common_index]
+        common_index = y.index.intersection(x.index) # Find common index values between y and x (common dates)
+        y = y[common_index] # Filter y to only common dates
+        x = x[common_index] # Filter y to only common dates
         
         # Calculate spread: spread = y - (α + β * x)
         spread = y - (pair['Alpha'] + pair['Beta'] * x)
@@ -250,16 +250,16 @@ def analyze_spreads(pairs_data, log_data, save_plots=True):
         x = log_data[index1].dropna()
         
         # Align data
-        common_index = y.index.intersection(x.index)
-        y = y[common_index]
-        x = x[common_index]
+        common_index = y.index.intersection(x.index) # Find common index values between y and x (common dates)
+        y = y[common_index] # Filter y to only common dates
+        x = x[common_index] # Filter y to only common dates
         
         # Calculate spread
         spread = y - (pair['Alpha'] + pair['Beta'] * x)
         
         # Calculate z-score: (spread - mean) / std
-        z_score = (spread - spread.mean()) / spread.std()
-        z_scores_data[pair['Pair']] = z_score
+        z_score = (spread - spread.mean()) / spread.std() 
+        z_scores_data[pair['Pair']] = z_score 
         
         # Plot normalized spread (z-score)
         axes2[i].plot(z_score.index, z_score, linewidth=1, alpha=0.7, label='Z-Score')
