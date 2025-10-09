@@ -5,6 +5,7 @@ from statsmodels.tsa.stattools import adfuller
 import warnings
 import os
 from datetime import datetime
+from itertools import combinations
 
 warnings.filterwarnings("ignore")
 import matplotlib.pyplot as plt
@@ -102,201 +103,183 @@ def plot_indices(df_to_plot, save_plots=True):
     
     plt.show()
 
-# Test unit roots
-def test_unit_roots(log_data):
-    results = []
-    for col in log_data.columns:
-        adf_stat, p_value, _, _, _, _ = adfuller(log_data[col].dropna())
-        is_stationary = p_value < 0.05
-        results.append({
-            'Index': col,
-            'p_value': round(p_value, 4),
-            'Is_Stationary': is_stationary
-        })
-    adf_results = pd.DataFrame(results)
-    stationary = adf_results[adf_results['Is_Stationary'] == True]['Index'].tolist()
-    non_stationary = adf_results[adf_results['Is_Stationary'] == False]['Index'].tolist()
-    
-    print(f"Stationary (I(0)): {len(stationary)} - {stationary}")
-    print(f"Non-stationary (I(1)): {len(non_stationary)} - {non_stationary}")
-    return adf_results
-
-# Test cointegration for pairs
-def test_cointegration(log_data, adf_data):
-    # Get non-stationary indices (I(1))
-    non_stationary = adf_data[adf_data['Is_Stationary'] == False]['Index'].tolist()
-    cointegrated_pairs = []
-    
-    print(f"\nTesting cointegration for {len(non_stationary)} I(1) series...")
-    
-    for i, index1 in enumerate(non_stationary):
-        for j, index2 in enumerate(non_stationary):
-            if i < j:  # Avoid duplicate pairs and self-pairs
-                
-                # OLS Regression: index2 = α + β * index1 + ε
-                y = log_data[index2].dropna()
-                x = log_data[index1].dropna()
-                
-                # Align data
-                common_index = y.index.intersection(x.index)
-                y = y[common_index]
-                x = x[common_index]
-                
-                # Add constant for intercept
-                X = sm.add_constant(x)
-                
-                # Run OLS regression
-                model = sm.OLS(y, X).fit()
-                beta = model.params.iloc[1]  # β coefficient
-                alpha = model.params.iloc[0]  # α intercept
-                
-                # Calculate spread (residual): spread = y - (α + β * x)
-                spread = y - (alpha + beta * x)
-                
-                # Test if spread is stationary (ADF test)
-                adf_stat, p_value, _, _, _, _ = adfuller(spread.dropna())
-                is_spread_stationary = p_value < 0.05
-                
-                if is_spread_stationary:
-                    cointegrated_pairs.append({
-                        'Pair': f"{index1} - {index2}",
-                        'Beta': round(beta, 4),
-                        'Alpha': round(alpha, 4),
-                        'Spread_p_value': round(p_value, 4),
-                        'Cointegrated': True
-                    })
-    
-    if cointegrated_pairs:
-        print(f"\nFound {len(cointegrated_pairs)} cointegrated pairs:")
-        for pair in cointegrated_pairs:
-            print(f"{pair['Pair']} - β={pair['Beta']}, p-value={pair['Spread_p_value']}")
-    else:
-        print("\nNo cointegrated pairs found.")
-    
-    return cointegrated_pairs
-
-# Calculate z-scores and plot spreads for all pairs
-def analyze_spreads(pairs_data, log_data, save_plots=True):
-    if not pairs_data:
-        print("No cointegrated pairs to analyze.")
+def plot_unnormalized_spreads(precomputed_spreads):
+    """
+    Plot and save unnormalized spreads given list of (pair_str, spread_series).
+    """
+    if not precomputed_spreads:
         return
-    
-    print(f"\nAnalyzing spreads for {len(pairs_data)} cointegrated pairs...")
-    
-    # Create outputs directories
-    if save_plots:
-        os.makedirs("../outputs/unnormalized_spreads", exist_ok=True)
-        os.makedirs("../outputs/z_scores", exist_ok=True)
-        os.makedirs("../outputs/z_scores_data", exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Plot unnormalized spreads
-    num_plots = len(pairs_data)
+    num_plots = len(precomputed_spreads)
     fig, axes = plt.subplots(num_plots, 1, figsize=(15, 3*num_plots))
     if num_plots == 1:
         axes = [axes]
-    
-    for i, pair in enumerate(pairs_data):
-        # Extract pair names
-        pair_names = pair['Pair'].split(' - ') # Split "Index1 - Index2" string into list
-        index1, index2 = pair_names[0], pair_names[1] # Assign first and second index names
-        
-        # Get data
-        y = log_data[index2].dropna() # Get dependent variable (y) and remove missing values
-        x = log_data[index1].dropna() # Get independent variable (x) and remove missing values
-        
-        # Align data
-        common_index = y.index.intersection(x.index) # Find common index values between y and x (common dates)
-        y = y[common_index] # Filter y to only common dates
-        x = x[common_index] # Filter y to only common dates
-        
-        # Calculate spread: spread = y - (α + β * x)
-        spread = y - (pair['Alpha'] + pair['Beta'] * x)
-        
-        # Plot unnormalized spread
+    os.makedirs("../outputs/unnormalized_spreads", exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    for i, (pair_str, spread) in enumerate(precomputed_spreads):
         axes[i].plot(spread.index, spread, linewidth=1, alpha=0.7, label='Spread')
         axes[i].axhline(y=spread.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean: {spread.mean():.4f}')
-        axes[i].set_title(f'{pair["Pair"]} - Unnormalized Spread')
+        axes[i].set_title(f'{pair_str} - Unnormalized Spread')
         axes[i].set_ylabel('Spread Value')
         axes[i].grid(True, alpha=0.3)
         axes[i].legend()
-    
     plt.xlabel('Date')
     plt.tight_layout()
-    
-    if save_plots:
-        plt.savefig(f"../outputs/unnormalized_spreads/unnormalized_spreads_{timestamp}.png", dpi=300, bbox_inches='tight')
-        print(f"Unnormalized spreads plot saved to outputs/unnormalized_spreads/unnormalized_spreads_{timestamp}.png")
-    
+    plt.savefig(f"../outputs/unnormalized_spreads/unnormalized_spreads_{ts}.png", dpi=300, bbox_inches='tight')
+    print(f"Unnormalized spreads plot saved to outputs/unnormalized_spreads/unnormalized_spreads_{ts}.png")
     plt.show()
-    
-    # Calculate and plot normalized spreads (z-scores)
+
+def plot_z_scores(precomputed_spreads, z_scores):
+    """
+    Plot and save z-score series for each pair and export the z-score data to CSV.
+    """
+    if not precomputed_spreads:
+        return
+    num_plots = len(precomputed_spreads)
     fig2, axes2 = plt.subplots(num_plots, 1, figsize=(15, 3*num_plots))
     if num_plots == 1:
         axes2 = [axes2]
-    
-    print(f"\nZ-score analysis for all {num_plots} pairs:")
-    
-    # Store z-scores for saving
-    z_scores_data = {}
-    
-    for i, pair in enumerate(pairs_data):
-        # Extract pair names
-        pair_names = pair['Pair'].split(' - ')
-        index1, index2 = pair_names[0], pair_names[1]
-        
-        # Get data
-        y = log_data[index2].dropna()
-        x = log_data[index1].dropna()
-        
-        # Align data
-        common_index = y.index.intersection(x.index) # Find common index values between y and x (common dates)
-        y = y[common_index] # Filter y to only common dates
-        x = x[common_index] # Filter y to only common dates
-        
-        # Calculate spread
-        spread = y - (pair['Alpha'] + pair['Beta'] * x)
-        
-        # Calculate z-score: (spread - mean) / std
-        z_score = (spread - spread.mean()) / spread.std() 
-        z_scores_data[pair['Pair']] = z_score 
-        
-        # Plot normalized spread (z-score)
-        axes2[i].plot(z_score.index, z_score, linewidth=1, alpha=0.7, label='Z-Score')
+    os.makedirs("../outputs/z_scores", exist_ok=True)
+    os.makedirs("../outputs/z_scores_data", exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    for i, (pair_str, _) in enumerate(precomputed_spreads):
+        z = z_scores[pair_str]
+        axes2[i].plot(z.index, z, linewidth=1, alpha=0.7, label='Z-Score')
         axes2[i].axhline(y=0, color='red', linestyle='--', linewidth=2, label='Mean (0)')
         axes2[i].axhline(y=2, color='green', linestyle=':', linewidth=1, label='±2σ')
         axes2[i].axhline(y=-2, color='green', linestyle=':', linewidth=1)
-        axes2[i].set_title(f'{pair["Pair"]} - Normalized Spread (Z-Score)')
+        axes2[i].set_title(f'{pair_str} - Normalized Spread (Z-Score)')
         axes2[i].set_ylabel('Z-Score')
         axes2[i].grid(True, alpha=0.3)
         axes2[i].legend()
-        
-        # Print statistics
-        print(f"{pair['Pair']}: Mean={spread.mean():.4f}, Std={spread.std():.4f}, Z-range=[{z_score.min():.2f}, {z_score.max():.2f}]")
-    
     plt.xlabel('Date')
     plt.tight_layout()
-    
-    if save_plots:
-        plt.savefig(f"../outputs/z_scores/z_scores_{timestamp}.png", dpi=300, bbox_inches='tight')
-        print(f"Z-scores plot saved to outputs/z_scores/z_scores_{timestamp}.png")
-        
-        # Save z-scores data to CSV
-        z_scores_df = pd.DataFrame(z_scores_data)
-        z_scores_df.to_csv(f"../outputs/z_scores_data/z_scores_{timestamp}.csv")
-        print(f"Z-scores data saved to outputs/z_scores_data/z_scores_{timestamp}.csv")
-    
+    plt.savefig(f"../outputs/z_scores/z_scores_{ts}.png", dpi=300, bbox_inches='tight')
+    print(f"Z-scores plot saved to outputs/z_scores/z_scores_{ts}.png")
+    pd.DataFrame(z_scores).to_csv(f"../outputs/z_scores_data/z_scores_{ts}.csv")
+    print(f"Z-scores data saved to outputs/z_scores_data/z_scores_{ts}.csv")
     plt.show()
+
     
-    return z_scores_data
+def compute_cointegration_and_spreads(log_data):
+    """
+    Find cointegrated pairs, compute spreads and z-scores.
+    Returns (cointegrated_pairs, precomputed_spreads, z_scores_data).
+    - precomputed_spreads: list of (pair_str, spread_series)
+    - z_scores_data: dict of {pair_str: z_score_series}
+    """
+    # Step 0: Unit root tests (ADF) and prefilter to I(1)
+    adf_rows = []
+    for col in log_data.columns:
+        adf_stat, p_value, _, _, _, _ = adfuller(log_data[col].dropna())
+        is_stationary = p_value < 0.05
+        adf_rows.append({'Index': col, 'p_value': round(p_value, 4), 'Is_Stationary': is_stationary})
+    adf_data = pd.DataFrame(adf_rows)
+    stationary = adf_data[adf_data['Is_Stationary'] == True]['Index'].tolist()
+    non_stationary = adf_data[adf_data['Is_Stationary'] == False]['Index'].tolist()
+    print(f"Stationary (I(0)): {len(stationary)} - {stationary}")
+    print(f"Non-stationary (I(1)): {len(non_stationary)} - {non_stationary}")
+
+    # Step 1: Find cointegrated pairs
+    
+    cointegrated_pairs = []
+    all_pairs_results = []
+    print(f"\nTesting cointegration for {len(non_stationary)} I(1) series...")
+    for index1, index2 in combinations(non_stationary, 2):
+        y = log_data[index2].dropna()
+        x = log_data[index1].dropna()
+        common_index = y.index.intersection(x.index)
+        y = y[common_index]
+        x = x[common_index]
+        X = sm.add_constant(x)
+        model = sm.OLS(y, X).fit()
+        beta = model.params.iloc[1]
+        alpha = model.params.iloc[0]
+        spread = y - (alpha + beta * x)
+        adf_stat, p_value, _, _, _, _ = adfuller(spread.dropna())
+        result_row = {
+            'Index_X': index1,
+            'Index_Y': index2,
+            'Alpha': alpha,
+            'Beta': beta,
+            'Spread_adf_stat': adf_stat,
+            'Spread_p_value': p_value,
+            'Cointegrated_5pct': bool(p_value < 0.05)
+        }
+        all_pairs_results.append(result_row)
+        if p_value < 0.05:
+            cointegrated_pairs.append({
+                'Pair': f"{index1} - {index2}",
+                'Beta': beta,
+                'Alpha': alpha,
+                'Spread_adf_stat': adf_stat,
+                'Spread_p_value': p_value,
+                'Cointegrated': True
+            })
+    if cointegrated_pairs:
+        print(f"\nFound {len(cointegrated_pairs)} cointegrated pairs:")
+        for pair in cointegrated_pairs:
+            print(f"{pair['Pair']} - β={pair['Beta']:.4f}, p-value={pair['Spread_p_value']:.4f}")
+    else:
+        print("\nNo cointegrated pairs found.")
+    
+    # Step 2: compute spreads and z-scores for all pairs (no plotting)
+    if not cointegrated_pairs:
+        # Export full results even if nothing cointegrates
+        try:
+            os.makedirs("../outputs/cointegration_results", exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            pd.DataFrame(all_pairs_results).to_csv(f"../outputs/cointegration_results/cointegration_results_{ts}.csv", index=False)
+            print(f"Saved cointegration results to outputs/cointegration_results/cointegration_results_{ts}.csv")
+        except Exception as e:
+            print(f"Warning: failed to save cointegration results CSV: {e}")
+        return cointegrated_pairs, [], {}
+    print(f"\nAnalyzing spreads for {len(cointegrated_pairs)} cointegrated pairs...")
+    precomputed = []
+    z_scores_data = {}
+    for pair in cointegrated_pairs:
+        pair_names = pair['Pair'].split(' - ')
+        index1, index2 = pair_names[0], pair_names[1]
+        y = log_data[index2].dropna()
+        x = log_data[index1].dropna()
+        common_index = y.index.intersection(x.index)
+        y = y[common_index]
+        x = x[common_index]
+        spread = y - (pair['Alpha'] + pair['Beta'] * x)
+        precomputed.append((pair['Pair'], spread))
+        spread_std = spread.std()
+        if spread_std is None or np.isclose(spread_std, 0.0):
+            print(f"{pair['Pair']}: Skipping z-score (zero or near-zero spread std)")
+            continue
+        z_score = (spread - spread.mean()) / spread_std
+        z_scores_data[pair['Pair']] = z_score
+        print(f"{pair['Pair']}: Mean={spread.mean():.4f}, Std={spread_std:.4f}, Z-range=[{z_score.min():.2f}, {z_score.max():.2f}]")
+
+    # Save full pair-wise results including non-cointegrated
+    try:
+        os.makedirs("../outputs/cointegration_results", exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pd.DataFrame(all_pairs_results).to_csv(f"../outputs/cointegration_results/cointegration_results_{ts}.csv", index=False)
+        print(f"Saved cointegration results to outputs/cointegration_results/cointegration_results_{ts}.csv")
+    except Exception as e:
+        print(f"Warning: failed to save cointegration results CSV: {e}")
+    return cointegrated_pairs, precomputed, z_scores_data
 
 def main(csv_path="../data/indices_eur.csv", excel_path="../data/indices final.xlsx"):
     df, df_log = load_data(csv_path, excel_path)
-    plot_indices(df)
-    adf_results = test_unit_roots(df_log)
-    pairs = test_cointegration(df_log, adf_results)
-    z_scores = analyze_spreads(pairs, df_log)
-    return df, df_log, adf_results, pairs, z_scores
+    # Compute cointegration, spreads and z-scores (includes internal ADF)
+    pairs, precomputed_spreads, z_scores = compute_cointegration_and_spreads(df_log)
+    
+    # Optional plotting centralized here for clarity
+    if pairs:
+        # Price series
+        plot_indices(df)
+        # Unnormalized spreads
+        plot_unnormalized_spreads(precomputed_spreads)
+
+        # Z-score plots
+        plot_z_scores(precomputed_spreads, z_scores)
+
+    return df, df_log, pairs, z_scores
 
 
 if __name__ == "__main__":
