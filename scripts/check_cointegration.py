@@ -3,12 +3,14 @@ import pandas as pd
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
 import warnings
+import os
+from datetime import datetime
 
 warnings.filterwarnings("ignore")
 import matplotlib.pyplot as plt
 
 # Load and prepare data
-def load_data(csv_path="indices_eur.csv"):
+def load_data(csv_path="../data/indices_eur.csv"):
     df = pd.read_csv(csv_path)
     df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
     df.set_index(df.columns[0], inplace=True)
@@ -18,7 +20,7 @@ def load_data(csv_path="indices_eur.csv"):
     return df, df_log
 
 # Plot indices
-def plot_indices(df_to_plot):
+def plot_indices(df_to_plot, save_plots=True):
     n_indices = len(df_to_plot.columns)
     fig, axes = plt.subplots(n_indices, 1, figsize=(15, 3*n_indices))
 
@@ -30,6 +32,13 @@ def plot_indices(df_to_plot):
 
     plt.xlabel('Date')
     plt.tight_layout()
+    
+    if save_plots:
+        os.makedirs("../outputs/price_series", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        plt.savefig(f"../outputs/price_series/price_series_{timestamp}.png", dpi=300, bbox_inches='tight')
+        print(f"Price series plot saved to outputs/price_series/price_series_{timestamp}.png")
+    
     plt.show()
 
 # Test unit roots
@@ -77,8 +86,8 @@ def test_cointegration(log_data, adf_data):
                 
                 # Run OLS regression
                 model = sm.OLS(y, X).fit()
-                beta = model.params[1]  # β coefficient
-                alpha = model.params[0]  # α intercept
+                beta = model.params.iloc[1]  # β coefficient
+                alpha = model.params.iloc[0]  # α intercept
                 
                 # Calculate spread (residual): spread = y - (α + β * x)
                 spread = y - (alpha + beta * x)
@@ -106,12 +115,19 @@ def test_cointegration(log_data, adf_data):
     return cointegrated_pairs
 
 # Calculate z-scores and plot spreads for all pairs
-def analyze_spreads(pairs_data, log_data):
+def analyze_spreads(pairs_data, log_data, save_plots=True):
     if not pairs_data:
         print("No cointegrated pairs to analyze.")
         return
     
     print(f"\nAnalyzing spreads for {len(pairs_data)} cointegrated pairs...")
+    
+    # Create outputs directories
+    if save_plots:
+        os.makedirs("../outputs/unnormalized_spreads", exist_ok=True)
+        os.makedirs("../outputs/z_scores", exist_ok=True)
+        os.makedirs("../outputs/z_scores_data", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Plot unnormalized spreads
     num_plots = len(pairs_data)
@@ -146,6 +162,11 @@ def analyze_spreads(pairs_data, log_data):
     
     plt.xlabel('Date')
     plt.tight_layout()
+    
+    if save_plots:
+        plt.savefig(f"../outputs/unnormalized_spreads/unnormalized_spreads_{timestamp}.png", dpi=300, bbox_inches='tight')
+        print(f"Unnormalized spreads plot saved to outputs/unnormalized_spreads/unnormalized_spreads_{timestamp}.png")
+    
     plt.show()
     
     # Calculate and plot normalized spreads (z-scores)
@@ -154,6 +175,9 @@ def analyze_spreads(pairs_data, log_data):
         axes2 = [axes2]
     
     print(f"\nZ-score analysis for all {num_plots} pairs:")
+    
+    # Store z-scores for saving
+    z_scores_data = {}
     
     for i, pair in enumerate(pairs_data):
         # Extract pair names
@@ -174,6 +198,7 @@ def analyze_spreads(pairs_data, log_data):
         
         # Calculate z-score: (spread - mean) / std
         z_score = (spread - spread.mean()) / spread.std()
+        z_scores_data[pair['Pair']] = z_score
         
         # Plot normalized spread (z-score)
         axes2[i].plot(z_score.index, z_score, linewidth=1, alpha=0.7, label='Z-Score')
@@ -190,14 +215,27 @@ def analyze_spreads(pairs_data, log_data):
     
     plt.xlabel('Date')
     plt.tight_layout()
+    
+    if save_plots:
+        plt.savefig(f"../outputs/z_scores/z_scores_{timestamp}.png", dpi=300, bbox_inches='tight')
+        print(f"Z-scores plot saved to outputs/z_scores/z_scores_{timestamp}.png")
+        
+        # Save z-scores data to CSV
+        z_scores_df = pd.DataFrame(z_scores_data)
+        z_scores_df.to_csv(f"../outputs/z_scores_data/z_scores_{timestamp}.csv")
+        print(f"Z-scores data saved to outputs/z_scores_data/z_scores_{timestamp}.csv")
+    
     plt.show()
+    
+    return z_scores_data
 
-def main(csv_path="indices_eur.csv"):
+def main(csv_path="../data/indices_eur.csv"):
     df, df_log = load_data(csv_path)
     plot_indices(df)
     adf_results = test_unit_roots(df_log)
     pairs = test_cointegration(df_log, adf_results)
-    analyze_spreads(pairs, df_log)
+    z_scores = analyze_spreads(pairs, df_log)
+    return df, df_log, adf_results, pairs, z_scores
 
 
 if __name__ == "__main__":
