@@ -233,6 +233,8 @@ def compute_cointegration_and_spreads(log_data):
         except Exception as e:
             print(f"Warning: failed to save cointegration results CSV: {e}")
         return cointegrated_pairs, [], {}
+    
+    
     print(f"\nAnalyzing spreads for {len(cointegrated_pairs)} cointegrated pairs...")
     precomputed = []
     z_scores_data = {}
