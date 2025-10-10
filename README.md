@@ -56,11 +56,13 @@ python check_cointegration.py
 2. Converts prices to log scale
 3. Runs ADF tests on all series to filter I(1) (non-stationary) indices
 4. Tests all I(1) pairs for cointegration using Engle-Granger:
-   - OLS regression: `y = α + βx`
+   - Static OLS regression: `y = α + βx` (full sample)
    - Spread = `y - (α + βx)`
    - ADF test on spread (p < 0.05 → cointegrated)
-5. Computes z-scores for cointegrated spreads
-6. Generates plots and exports results
+5. Computes dynamic z-scores for cointegrated pairs:
+   - **Rolling OLS** (5-year window ≈ 1260 days): Adapts to regime changes
+   - **Expanding OLS** (recursive): Uses all data from start to current point
+6. Generates plots and exports results with no look-ahead bias
 
 ### Outputs:
 
@@ -68,9 +70,8 @@ All outputs are timestamped and saved to `outputs/`:
 
 - **cointegration_results_YYYYMMDD_HHMMSS.csv**: All pair test results (α, β, ADF stat, p-value)
 - **price_series_YYYYMMDD_HHMMSS.png**: Raw price plots for all indices
-- **unnormalized_spreads_YYYYMMDD_HHMMSS.png**: Spread time series with mean line
-- **z_scores_YYYYMMDD_HHMMSS.png**: Normalized spreads with ±2σ bands
-- **z_scores_YYYYMMDD_HHMMSS.csv**: Z-score data for backtesting
+- **z_scores_YYYYMMDD_HHMMSS.png**: Rolling vs expanding z-scores with ±2σ bands
+- **z_scores_all_pairs_YYYYMMDD_HHMMSS.csv**: Combined z-score data for all pairs (rolling and expanding)
 
 ## Data Format
 
@@ -101,26 +102,35 @@ See `requirements.txt` for version details.
 
 ## Methodology
 
-**Engle-Granger Cointegration:**
+**Engle-Granger Cointegration (Step 1: Testing):**
 1. Pre-filter to I(1) series using ADF test (p ≥ 0.05)
 2. For each pair (X, Y):
-   - Estimate cointegrating relationship: `Y = α + βX + ε`
+   - Estimate cointegrating relationship: `Y = α + βX + ε` (static, full sample)
    - Test if residuals (spread) are I(0) using ADF
 3. If spread is stationary (p < 0.05), the pair is cointegrated
-4. Z-score the spread for trading signals
 
-**Trading Signals (conceptual):**
+**Dynamic Z-Score Calculation (Step 2: Trading Signals):**
+1. **Rolling OLS** (5-year window): Re-estimates α, β using last 1260 days
+   - Adapts to changing market regimes
+   - No look-ahead bias
+2. **Expanding OLS** (recursive): Re-estimates α, β using all data from start to current point
+   - Uses maximum available information
+   - More stable estimates
+3. Z-score = `(spread_t - mean_window) / std_window`
+
+**Trading Signals:**
 - Z-score > +2: spread is too high → short Y, long X
 - Z-score < -2: spread is too low → long Y, short X
 - Z-score → 0: spread reverts to mean → exit position
 
 ## Next Steps
 
-- [ ] Implement backtesting framework
-- [ ] Add rolling z-scores for out-of-sample signals
+- [x] Implement rolling and expanding OLS for dynamic z-scores
+- [ ] Implement backtesting framework with entry/exit signals
 - [ ] Risk management and position sizing
+- [ ] Walk-forward analysis for parameter optimization
 - [ ] Johansen test for multiple cointegrating vectors
-- [ ] Real-time monitoring
+- [ ] Real-time monitoring and alerts
 
 ## License
 

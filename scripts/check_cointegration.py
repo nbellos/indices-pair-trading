@@ -103,60 +103,91 @@ def plot_indices(df_to_plot, save_plots=True):
     
     plt.show()
 
-def plot_unnormalized_spreads(precomputed_spreads):
+def compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_periods=252):
     """
-    Plot and save unnormalized spreads given list of (pair_str, spread_series).
+    Compute z-score using rolling or expanding OLS.
+    
+    Args:
+        window: If specified, uses rolling window. If None, uses expanding window.
+        min_periods: Minimum observations to start calculation
     """
-    if not precomputed_spreads:
+    y = log_data[index2].dropna()
+    x = log_data[index1].dropna()
+    common_index = y.index.intersection(x.index)
+    y = y[common_index]
+    x = x[common_index]
+    
+    z_scores = []
+    start_idx = window if window else min_periods
+    
+    for i in range(start_idx, len(common_index)):
+        # Rolling: use last 'window' observations; Expanding: use all from start
+        start = i - window if window else 0
+        y_window = y.iloc[start:i]
+        x_window = x.iloc[start:i]
+        
+        X_window = sm.add_constant(x_window)
+        model = sm.OLS(y_window, X_window).fit()
+        alpha = model.params.iloc[0]
+        beta = model.params.iloc[1]
+        
+        spread_value = y.iloc[i] - (alpha + beta * x.iloc[i])
+        spread_window = y_window - (alpha + beta * x_window)
+        spread_mean = spread_window.mean()
+        spread_std = spread_window.std()
+        
+        z_score = (spread_value - spread_mean) / spread_std if spread_std > 0 else 0.0
+        z_scores.append(z_score)
+    
+    return pd.Series(z_scores, index=common_index[start_idx:])
+
+def plot_z_scores(z_scores_rolling, z_scores_expanding):
+    """
+    Plot rolling vs expanding z-scores for all pairs and save to CSV.
+    """
+    if not z_scores_rolling:
         return
-    num_plots = len(precomputed_spreads)
-    fig, axes = plt.subplots(num_plots, 1, figsize=(15, 3*num_plots))
+    
+    num_plots = len(z_scores_rolling)
+    fig, axes = plt.subplots(num_plots, 1, figsize=(15, 4*num_plots))
     if num_plots == 1:
         axes = [axes]
-    os.makedirs("../outputs/unnormalized_spreads", exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    for i, (pair_str, spread) in enumerate(precomputed_spreads):
-        axes[i].plot(spread.index, spread, linewidth=1, alpha=0.7, label='Spread')
-        axes[i].axhline(y=spread.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean: {spread.mean():.4f}')
-        axes[i].set_title(f'{pair_str} - Unnormalized Spread')
-        axes[i].set_ylabel('Spread Value')
-        axes[i].grid(True, alpha=0.3)
-        axes[i].legend()
-    plt.xlabel('Date')
-    plt.tight_layout()
-    plt.savefig(f"../outputs/unnormalized_spreads/unnormalized_spreads_{ts}.png", dpi=300, bbox_inches='tight')
-    print(f"Unnormalized spreads plot saved to outputs/unnormalized_spreads/unnormalized_spreads_{ts}.png")
-    plt.show()
-
-def plot_z_scores(precomputed_spreads, z_scores):
-    """
-    Plot and save z-score series for each pair and export the z-score data to CSV.
-    """
-    if not precomputed_spreads:
-        return
-    num_plots = len(precomputed_spreads)
-    fig2, axes2 = plt.subplots(num_plots, 1, figsize=(15, 3*num_plots))
-    if num_plots == 1:
-        axes2 = [axes2]
+    
     os.makedirs("../outputs/z_scores", exist_ok=True)
     os.makedirs("../outputs/z_scores_data", exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    for i, (pair_str, _) in enumerate(precomputed_spreads):
-        z = z_scores[pair_str]
-        axes2[i].plot(z.index, z, linewidth=1, alpha=0.7, label='Z-Score')
-        axes2[i].axhline(y=0, color='red', linestyle='--', linewidth=2, label='Mean (0)')
-        axes2[i].axhline(y=2, color='green', linestyle=':', linewidth=1, label='±2σ')
-        axes2[i].axhline(y=-2, color='green', linestyle=':', linewidth=1)
-        axes2[i].set_title(f'{pair_str} - Normalized Spread (Z-Score)')
-        axes2[i].set_ylabel('Z-Score')
-        axes2[i].grid(True, alpha=0.3)
-        axes2[i].legend()
+    
+    for i, pair_name in enumerate(z_scores_rolling.keys()):
+        z_roll = z_scores_rolling[pair_name]
+        z_exp = z_scores_expanding[pair_name]
+        
+        axes[i].plot(z_roll.index, z_roll, linewidth=1.5, alpha=0.8, label='Rolling (5yr)', color='blue')
+        axes[i].plot(z_exp.index, z_exp, linewidth=1.5, alpha=0.8, label='Expanding (Recursive)', color='orange')
+        axes[i].axhline(y=0, color='black', linestyle='--', linewidth=1, label='Mean (0)')
+        axes[i].axhline(y=2, color='red', linestyle=':', linewidth=1, label='±2σ')
+        axes[i].axhline(y=-2, color='red', linestyle=':', linewidth=1)
+        axes[i].set_title(f'{pair_name} - Z-Score (Rolling vs Expanding OLS)')
+        axes[i].set_ylabel('Z-Score')
+        axes[i].grid(True, alpha=0.3)
+        axes[i].legend(loc='upper right')
+    
     plt.xlabel('Date')
     plt.tight_layout()
     plt.savefig(f"../outputs/z_scores/z_scores_{ts}.png", dpi=300, bbox_inches='tight')
     print(f"Z-scores plot saved to outputs/z_scores/z_scores_{ts}.png")
-    pd.DataFrame(z_scores).to_csv(f"../outputs/z_scores_data/z_scores_{ts}.csv")
-    print(f"Z-scores data saved to outputs/z_scores_data/z_scores_{ts}.csv")
+    
+    # Combine all z-scores into a single CSV
+    all_z_scores = {}
+    for pair_name in z_scores_rolling.keys():
+        # Sanitize column names
+        safe_name = pair_name.replace(' - ', '_').replace(' ', '_').replace('&', 'and').replace('/', '_')
+        all_z_scores[f'{safe_name}_Rolling'] = z_scores_rolling[pair_name]
+        all_z_scores[f'{safe_name}_Expanding'] = z_scores_expanding[pair_name]
+    
+    combined_df = pd.DataFrame(all_z_scores)
+    combined_df.to_csv(f"../outputs/z_scores_data/z_scores_all_pairs_{ts}.csv")
+    print(f"Z-scores data saved to outputs/z_scores_data/z_scores_all_pairs_{ts}.csv")
+    
     plt.show()
 
     
@@ -222,7 +253,7 @@ def compute_cointegration_and_spreads(log_data):
     else:
         print("\nNo cointegrated pairs found.")
     
-    # Step 2: compute spreads and z-scores for all pairs (no plotting)
+    # Step 2: compute spreads and z-scores for all pairs
     if not cointegrated_pairs:
         # Export full results even if nothing cointegrates
         try:
@@ -235,53 +266,50 @@ def compute_cointegration_and_spreads(log_data):
         return cointegrated_pairs, [], {}
     
     
-    print(f"\nAnalyzing spreads for {len(cointegrated_pairs)} cointegrated pairs...")
-    precomputed = []
-    z_scores_data = {}
+    print(f"\nComputing rolling and expanding z-scores for {len(cointegrated_pairs)} cointegrated pairs...")
+    z_scores_rolling = {}
+    z_scores_expanding = {}
+    
     for pair in cointegrated_pairs:
         pair_names = pair['Pair'].split(' - ')
         index1, index2 = pair_names[0], pair_names[1]
-        y = log_data[index2].dropna()
-        x = log_data[index1].dropna()
-        common_index = y.index.intersection(x.index)
-        y = y[common_index]
-        x = x[common_index]
-        spread = y - (pair['Alpha'] + pair['Beta'] * x)
-        precomputed.append((pair['Pair'], spread))
-        spread_std = spread.std()
-        if spread_std is None or np.isclose(spread_std, 0.0):
-            print(f"{pair['Pair']}: Skipping z-score (zero or near-zero spread std)")
-            continue
-        z_score = (spread - spread.mean()) / spread_std
-        z_scores_data[pair['Pair']] = z_score
-        print(f"{pair['Pair']}: Mean={spread.mean():.4f}, Std={spread_std:.4f}, Z-range=[{z_score.min():.2f}, {z_score.max():.2f}]")
+        pair_name = pair['Pair']
+        
+        # Compute z-scores using rolling OLS (5-year window = 1260 days)
+        z_roll = compute_dynamic_ols_zscore(log_data, index1, index2, window=1260)
+        z_scores_rolling[pair_name] = z_roll
+        
+        # Compute z-scores using expanding OLS (recursive, min 252 days)
+        z_exp = compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_periods=252)
+        z_scores_expanding[pair_name] = z_exp
+        
+        print(f"{pair_name}:")
+        print(f"  Rolling   - Z-range: [{z_roll.min():.2f}, {z_roll.max():.2f}], {len(z_roll)} observations")
+        print(f"  Expanding - Z-range: [{z_exp.min():.2f}, {z_exp.max():.2f}], {len(z_exp)} observations")
 
-    # Save full pair-wise results including non-cointegrated
+    # Save full pair-wise cointegration results
     try:
         os.makedirs("../outputs/cointegration_results", exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         pd.DataFrame(all_pairs_results).to_csv(f"../outputs/cointegration_results/cointegration_results_{ts}.csv", index=False)
-        print(f"Saved cointegration results to outputs/cointegration_results/cointegration_results_{ts}.csv")
+        print(f"\nSaved cointegration results to outputs/cointegration_results/cointegration_results_{ts}.csv")
     except Exception as e:
         print(f"Warning: failed to save cointegration results CSV: {e}")
-    return cointegrated_pairs, precomputed, z_scores_data
+    
+    return cointegrated_pairs, z_scores_rolling, z_scores_expanding
 
 def main(csv_path="../data/indices_eur.csv", excel_path="../data/indices final.xlsx"):
     df, df_log = load_data(csv_path, excel_path)
-    # Compute cointegration, spreads and z-scores (includes internal ADF)
-    pairs, precomputed_spreads, z_scores = compute_cointegration_and_spreads(df_log)
+    # Compute cointegration with rolling and expanding z-scores
+    pairs, z_scores_rolling, z_scores_expanding = compute_cointegration_and_spreads(df_log)
     
-    # Optional plotting centralized here for clarity
     if pairs:
         # Price series
         plot_indices(df)
-        # Unnormalized spreads
-        plot_unnormalized_spreads(precomputed_spreads)
+        # Z-score plots (rolling vs expanding)
+        plot_z_scores(z_scores_rolling, z_scores_expanding)
 
-        # Z-score plots
-        plot_z_scores(precomputed_spreads, z_scores)
-
-    return df, df_log, pairs, z_scores
+    return df, df_log, pairs, z_scores_rolling, z_scores_expanding
 
 
 if __name__ == "__main__":
