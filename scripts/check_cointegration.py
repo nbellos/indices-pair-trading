@@ -105,12 +105,19 @@ def plot_indices(df_to_plot, save_plots=True):
 
 def compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_periods=252):
     """
-    Compute z-score using rolling or expanding OLS.
+    Compute z-score using rolling or expanding OLS to avoid look-ahead bias.
     
     Args:
-        window: If specified, uses rolling window. If None, uses expanding window.
-        min_periods: Minimum observations to start calculation
+        log_data: DataFrame of log-transformed prices
+        index1: Name of X series (independent variable)
+        index2: Name of Y series (dependent variable)
+        window: If specified, uses rolling window. If None, uses expanding window
+        min_periods: Minimum observations required to start calculation
+    
+    Returns:
+        Series of z-scores indexed by date
     """
+    # Extract and align the two price series
     y = log_data[index2].dropna()
     x = log_data[index1].dropna()
     common_index = y.index.intersection(x.index)
@@ -120,22 +127,26 @@ def compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_period
     z_scores = []
     start_idx = window if window else min_periods
     
+    # For each time point, estimate parameters using only past data
     for i in range(start_idx, len(common_index)):
-        # Rolling: use last 'window' observations; Expanding: use all from start
+        # Determine window: rolling uses last 'window' obs, expanding uses all from start
         start = i - window if window else 0
         y_window = y.iloc[start:i]
         x_window = x.iloc[start:i]
         
+        # OLS regression: Y = α + βX + ε
         X_window = sm.add_constant(x_window)
         model = sm.OLS(y_window, X_window).fit()
-        alpha = model.params.iloc[0]
-        beta = model.params.iloc[1]
+        alpha = model.params.iloc[0]  # Intercept
+        beta = model.params.iloc[1]   # Slope (hedge ratio)
         
+        # Compute current spread and its statistics from window
         spread_value = y.iloc[i] - (alpha + beta * x.iloc[i])
         spread_window = y_window - (alpha + beta * x_window)
         spread_mean = spread_window.mean()
         spread_std = spread_window.std()
         
+        # Z-score normalization
         z_score = (spread_value - spread_mean) / spread_std if spread_std > 0 else 0.0
         z_scores.append(z_score)
     
@@ -193,38 +204,54 @@ def plot_z_scores(z_scores_rolling, z_scores_expanding):
     
 def compute_cointegration_and_spreads(log_data):
     """
-    Find cointegrated pairs, compute spreads and z-scores.
-    Returns (cointegrated_pairs, precomputed_spreads, z_scores_data).
-    - precomputed_spreads: list of (pair_str, spread_series)
-    - z_scores_data: dict of {pair_str: z_score_series}
+    Identify cointegrated pairs using Engle-Granger methodology and compute dynamic z-scores.
+    
+    Args:
+        log_data: DataFrame of log-transformed price series
+    
+    Returns:
+        tuple: (cointegrated_pairs, z_scores_rolling, z_scores_expanding)
+            - cointegrated_pairs: List of dicts with pair info and test statistics
+            - z_scores_rolling: Dict of rolling z-score series by pair name
+            - z_scores_expanding: Dict of expanding z-score series by pair name
     """
-    # Step 0: Unit root tests (ADF) and prefilter to I(1)
+    # Step 0: Unit root testing (ADF) to identify I(1) series
+    # H0: Series has unit root (non-stationary)
+    # Reject H0 if p < 0.05 → series is I(0) (stationary)
     adf_rows = []
     for col in log_data.columns:
         adf_stat, p_value, _, _, _, _ = adfuller(log_data[col].dropna())
         is_stationary = p_value < 0.05
         adf_rows.append({'Index': col, 'p_value': round(p_value, 4), 'Is_Stationary': is_stationary})
+    
     adf_data = pd.DataFrame(adf_rows)
     stationary = adf_data[adf_data['Is_Stationary'] == True]['Index'].tolist()
     non_stationary = adf_data[adf_data['Is_Stationary'] == False]['Index'].tolist()
     print(f"Stationary (I(0)): {len(stationary)} - {stationary}")
     print(f"Non-stationary (I(1)): {len(non_stationary)} - {non_stationary}")
 
-    # Step 1: Find cointegrated pairs
-    
+    # Step 1: Engle-Granger cointegration test
+    # Test all pairs of I(1) series for cointegration
     cointegrated_pairs = []
     all_pairs_results = []
     print(f"\nTesting cointegration for {len(non_stationary)} I(1) series...")
+    
     for index1, index2 in combinations(non_stationary, 2):
+        # Align data on common dates
         y = log_data[index2].dropna()
         x = log_data[index1].dropna()
         common_index = y.index.intersection(x.index)
         y = y[common_index]
         x = x[common_index]
+        
+        # Engle-Granger Step 1: Estimate cointegrating regression
+        # Y_t = α + βX_t + ε_t (static OLS on full sample)
         X = sm.add_constant(x)
         model = sm.OLS(y, X).fit()
-        beta = model.params.iloc[1]
-        alpha = model.params.iloc[0]
+        beta = model.params.iloc[1]   # Hedge ratio
+        alpha = model.params.iloc[0]  # Constant term
+        
+        # Engle-Granger Step 2: Test residuals for stationarity
         spread = y - (alpha + beta * x)
         adf_stat, p_value, _, _, _, _ = adfuller(spread.dropna())
         result_row = {
