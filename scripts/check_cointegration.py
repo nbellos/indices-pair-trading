@@ -73,6 +73,7 @@ def load_data(csv_path="../data/indices_eur.csv", excel_path="../data/indices fi
         print("CSV file not found. Converting Excel to CSV...")
         convert_excel_to_csv(excel_path, csv_path)
     
+    #change from csv to dataframe,set the first column as datetime and set it as index,after apply log to the daily prices.
     df = pd.read_csv(csv_path)
     df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
     df.set_index(df.columns[0], inplace=True)
@@ -105,7 +106,7 @@ def plot_indices(df_to_plot, save_plots=True):
 
 def compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_periods=252):
     """
-    Compute z-score using rolling or expanding OLS to avoid look-ahead bias.
+    Compute z-score using rolling or recursive OLS.
     
     Args:
         log_data: DataFrame of log-transformed prices
@@ -125,11 +126,12 @@ def compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_period
     x = x[common_index]
     
     z_scores = []
+    #if window given-start after that many observations (rolling method),else start after min periods(recursive..)
     start_idx = window if window else min_periods
     
-    # For each time point, estimate parameters using only past data
+    # Estimate parameters
     for i in range(start_idx, len(common_index)):
-        # Determine window: rolling uses last 'window' obs, expanding uses all from start
+        # Determine the regression window:if rolling window->use only the last window observations else use everything from start to i.
         start = i - window if window else 0
         y_window = y.iloc[start:i]
         x_window = x.iloc[start:i]
@@ -137,10 +139,10 @@ def compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_period
         # OLS regression: Y = α + βX + ε
         X_window = sm.add_constant(x_window)
         model = sm.OLS(y_window, X_window).fit()
-        alpha = model.params.iloc[0]  # Intercept
-        beta = model.params.iloc[1]   # Slope (hedge ratio)
+        alpha = model.params.iloc[0]
+        beta = model.params.iloc[1]  
         
-        # Compute current spread and its statistics from window
+        # Compute current spread and spread stats from current window
         spread_value = y.iloc[i] - (alpha + beta * x.iloc[i])
         spread_window = y_window - (alpha + beta * x_window)
         spread_mean = spread_window.mean()
@@ -302,11 +304,11 @@ def compute_cointegration_and_spreads(log_data):
         index1, index2 = pair_names[0], pair_names[1]
         pair_name = pair['Pair']
         
-        # Compute z-scores using rolling OLS (5-year window = 1260 days)
+        # Compute z-scores using rolling OLS (5-year window, 1260 days)
         z_roll = compute_dynamic_ols_zscore(log_data, index1, index2, window=1260)
         z_scores_rolling[pair_name] = z_roll
         
-        # Compute z-scores using expanding OLS (recursive, min 252 days)
+        # Compute z-scores using expanding OLS (recursive, calculate parameters after 252 days of past data until end date)
         z_exp = compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_periods=252)
         z_scores_expanding[pair_name] = z_exp
         
