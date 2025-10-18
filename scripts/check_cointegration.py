@@ -10,6 +10,13 @@ from itertools import combinations
 warnings.filterwarnings("ignore")
 import matplotlib.pyplot as plt
 
+# Ensure matplotlib uses a non-interactive backend if plotting is used
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+except Exception:
+    pass
+
 # Convert Excel to CSV if needed
 def convert_excel_to_csv(excel_path="../data/indices final.xlsx", csv_path="../data/indices_eur.csv"):
     """
@@ -154,14 +161,15 @@ def compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_period
     
     return pd.Series(z_scores, index=common_index[start_idx:])
 
-def plot_z_scores(z_scores_rolling, z_scores_expanding):
+def plot_z_scores(z_scores_rolling, z_scores_expanding=None):
     """
-    Plot rolling vs expanding z-scores for all pairs and save to CSV.
+    Plot z-scores for available modes (rolling and/or expanding) and save to CSV.
     """
-    if not z_scores_rolling:
+    if not z_scores_rolling and not z_scores_expanding:
         return
     
-    num_plots = len(z_scores_rolling)
+    base_dict = z_scores_rolling if z_scores_rolling else z_scores_expanding
+    num_plots = len(base_dict)
     fig, axes = plt.subplots(num_plots, 1, figsize=(15, 4*num_plots))
     if num_plots == 1:
         axes = [axes]
@@ -169,33 +177,50 @@ def plot_z_scores(z_scores_rolling, z_scores_expanding):
     os.makedirs("../outputs/z_scores", exist_ok=True)
     os.makedirs("../outputs/z_scores_data", exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Determine title suffix and filename tag
+    show_roll = bool(z_scores_rolling)
+    show_exp = bool(z_scores_expanding)
+    if show_roll and show_exp:
+        mode_tag = "ROLL_EXP"
+        title_suffix = "(Rolling vs Expanding OLS)"
+    elif show_roll:
+        mode_tag = "ROLLING"
+        title_suffix = "(Rolling OLS)"
+    else:
+        mode_tag = "EXPANDING"
+        title_suffix = "(Expanding OLS)"
     
-    for i, pair_name in enumerate(z_scores_rolling.keys()):
-        z_roll = z_scores_rolling[pair_name]
-        z_exp = z_scores_expanding[pair_name]
-        
-        axes[i].plot(z_roll.index, z_roll, linewidth=1.5, alpha=0.8, label='Rolling (5yr)', color='blue')
-        axes[i].plot(z_exp.index, z_exp, linewidth=1.5, alpha=0.8, label='Expanding (Recursive)', color='orange')
+    for i, pair_name in enumerate(base_dict.keys()):
+        if z_scores_rolling and pair_name in z_scores_rolling:
+            z_roll = z_scores_rolling[pair_name]
+            axes[i].plot(z_roll.index, z_roll, linewidth=1.5, alpha=0.8, label='Rolling (5yr)', color='blue')
+        if z_scores_expanding and pair_name in z_scores_expanding:
+            z_exp = z_scores_expanding[pair_name]
+            axes[i].plot(z_exp.index, z_exp, linewidth=1.5, alpha=0.8, label='Expanding (Recursive)', color='orange')
         axes[i].axhline(y=0, color='black', linestyle='--', linewidth=1, label='Mean (0)')
         axes[i].axhline(y=2, color='red', linestyle=':', linewidth=1, label='±2σ')
         axes[i].axhline(y=-2, color='red', linestyle=':', linewidth=1)
-        axes[i].set_title(f'{pair_name} - Z-Score (Rolling vs Expanding OLS)')
+        axes[i].set_title(f'{pair_name} - Z-Score {title_suffix}')
         axes[i].set_ylabel('Z-Score')
         axes[i].grid(True, alpha=0.3)
         axes[i].legend(loc='upper right')
     
     plt.xlabel('Date')
     plt.tight_layout()
-    plt.savefig(f"../outputs/z_scores/z_scores_{ts}.png", dpi=300, bbox_inches='tight')
-    print(f"Z-scores plot saved to outputs/z_scores/z_scores_{ts}.png")
+    out_path = f"../outputs/z_scores/z_scores_{mode_tag}_{ts}.png"
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    print(f"Z-scores plot saved to {out_path}")
     
     # Combine all z-scores into a single CSV
     all_z_scores = {}
-    for pair_name in z_scores_rolling.keys():
-        # Sanitize column names
-        safe_name = pair_name.replace(' - ', '_').replace(' ', '_').replace('&', 'and').replace('/', '_')
-        all_z_scores[f'{safe_name}_Rolling'] = z_scores_rolling[pair_name]
-        all_z_scores[f'{safe_name}_Expanding'] = z_scores_expanding[pair_name]
+    if z_scores_rolling:
+        for pair_name in z_scores_rolling.keys():
+            safe_name = pair_name.replace(' - ', '_').replace(' ', '_').replace('&', 'and').replace('/', '_')
+            all_z_scores[f'{safe_name}_Rolling'] = z_scores_rolling[pair_name]
+    if z_scores_expanding:
+        for pair_name in z_scores_expanding.keys():
+            safe_name = pair_name.replace(' - ', '_').replace(' ', '_').replace('&', 'and').replace('/', '_')
+            all_z_scores[f'{safe_name}_Expanding'] = z_scores_expanding[pair_name]
     
     combined_df = pd.DataFrame(all_z_scores)
     combined_df.to_csv(f"../outputs/z_scores_data/z_scores_all_pairs_{ts}.csv")
@@ -204,7 +229,7 @@ def plot_z_scores(z_scores_rolling, z_scores_expanding):
     plt.show()
 
     
-def compute_cointegration_and_spreads(log_data):
+def compute_cointegration_and_spreads(log_data, compute_expanding: bool = True):
     """
     Identify cointegrated pairs using Engle-Granger methodology and compute dynamic z-scores.
     
@@ -233,11 +258,13 @@ def compute_cointegration_and_spreads(log_data):
     print(f"Non-stationary (I(1)): {len(non_stationary)} - {non_stationary}")
 
     # Step 1: Engle-Granger cointegration test
-    # Test all pairs of I(1) series for cointegration
+    # Test all pairs of I(1) series for cointegration, but first prefilter by Pearson correlation ≥ 0.8 (absolute)
     cointegrated_pairs = []
     all_pairs_results = []
-    print(f"\nTesting cointegration for {len(non_stationary)} I(1) series...")
+    corr_threshold = 0.8
+    print(f"\nTesting cointegration for {len(non_stationary)} I(1) series (prefilter |corr| ≥ {corr_threshold})...")
     
+    tested_pairs = 0
     for index1, index2 in combinations(non_stationary, 2):
         # Align data on common dates
         y = log_data[index2].dropna()
@@ -245,6 +272,24 @@ def compute_cointegration_and_spreads(log_data):
         common_index = y.index.intersection(x.index)
         y = y[common_index]
         x = x[common_index]
+        # Correlation prefilter on log-prices
+        if len(common_index) == 0:
+            continue
+        corr = float(x.corr(y))
+        if not np.isfinite(corr) or abs(corr) < corr_threshold:
+            # Record skipped pair with correlation info
+            all_pairs_results.append({
+                'Index_X': index1,
+                'Index_Y': index2,
+                'Alpha': np.nan,
+                'Beta': np.nan,
+                'Spread_adf_stat': np.nan,
+                'Spread_p_value': np.nan,
+                'Cointegrated_5pct': False,
+                'Pearson_corr': corr
+            })
+            continue
+        tested_pairs += 1
         
         # Engle-Granger Step 1: Estimate cointegrating regression
         # Y_t = α + βX_t + ε_t (static OLS on full sample)
@@ -263,7 +308,8 @@ def compute_cointegration_and_spreads(log_data):
             'Beta': beta,
             'Spread_adf_stat': adf_stat,
             'Spread_p_value': p_value,
-            'Cointegrated_5pct': bool(p_value < 0.05)
+            'Cointegrated_5pct': bool(p_value < 0.05),
+            'Pearson_corr': corr
         }
         all_pairs_results.append(result_row)
         if p_value < 0.05:
@@ -281,6 +327,7 @@ def compute_cointegration_and_spreads(log_data):
             print(f"{pair['Pair']} - β={pair['Beta']:.4f}, p-value={pair['Spread_p_value']:.4f}")
     else:
         print("\nNo cointegrated pairs found.")
+    print(f"Pairs tested after correlation prefilter: {tested_pairs}")
     
     # Step 2: compute spreads and z-scores for all pairs
     if not cointegrated_pairs:
@@ -295,26 +342,25 @@ def compute_cointegration_and_spreads(log_data):
         return cointegrated_pairs, [], {}
     
     
-    print(f"\nComputing rolling and expanding z-scores for {len(cointegrated_pairs)} cointegrated pairs...")
+    print(f"\nComputing z-scores for {len(cointegrated_pairs)} cointegrated pairs...")
     z_scores_rolling = {}
-    z_scores_expanding = {}
+    z_scores_expanding = {} if compute_expanding else None
     
     for pair in cointegrated_pairs:
         pair_names = pair['Pair'].split(' - ')
         index1, index2 = pair_names[0], pair_names[1]
         pair_name = pair['Pair']
         
-        # Compute z-scores using rolling OLS (5-year window, 1260 days)
+        # Rolling z (5-year window)
         z_roll = compute_dynamic_ols_zscore(log_data, index1, index2, window=1260)
         z_scores_rolling[pair_name] = z_roll
-        
-        # Compute z-scores using expanding OLS (recursive, calculate parameters after 252 days of past data until end date)
-        z_exp = compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_periods=252)
-        z_scores_expanding[pair_name] = z_exp
-        
         print(f"{pair_name}:")
         print(f"  Rolling   - Z-range: [{z_roll.min():.2f}, {z_roll.max():.2f}], {len(z_roll)} observations")
-        print(f"  Expanding - Z-range: [{z_exp.min():.2f}, {z_exp.max():.2f}], {len(z_exp)} observations")
+        if compute_expanding:
+            # Expanding z (diagnostic if requested)
+            z_exp = compute_dynamic_ols_zscore(log_data, index1, index2, window=None, min_periods=252)
+            z_scores_expanding[pair_name] = z_exp
+            print(f"  Expanding - Z-range: [{z_exp.min():.2f}, {z_exp.max():.2f}], {len(z_exp)} observations")
 
     # Save full pair-wise cointegration results
     try:
@@ -325,18 +371,24 @@ def compute_cointegration_and_spreads(log_data):
     except Exception as e:
         print(f"Warning: failed to save cointegration results CSV: {e}")
     
-    return cointegrated_pairs, z_scores_rolling, z_scores_expanding
+    return cointegrated_pairs, z_scores_rolling, (z_scores_expanding or {})
 
-def main(csv_path="../data/indices_eur.csv", excel_path="../data/indices final.xlsx"):
+def main(csv_path="../data/indices_eur.csv", excel_path="../data/indices final.xlsx", z_mode: str = 'both'):
     df, df_log = load_data(csv_path, excel_path)
-    # Compute cointegration with rolling and expanding z-scores
-    pairs, z_scores_rolling, z_scores_expanding = compute_cointegration_and_spreads(df_log)
+    # Compute cointegration; optionally skip expanding for speed/log cleanliness
+    compute_expanding = (z_mode != 'rolling')
+    pairs, z_scores_rolling, z_scores_expanding = compute_cointegration_and_spreads(df_log, compute_expanding=compute_expanding)
     
     if pairs:
         # Price series
         plot_indices(df)
-        # Z-score plots (rolling vs expanding)
-        plot_z_scores(z_scores_rolling, z_scores_expanding)
+        # Z-score plots according to mode
+        if z_mode == 'rolling':
+            plot_z_scores(z_scores_rolling, None)
+        elif z_mode == 'expanding':
+            plot_z_scores({}, z_scores_expanding)
+        else:
+            plot_z_scores(z_scores_rolling, z_scores_expanding)
 
     return df, df_log, pairs, z_scores_rolling, z_scores_expanding
 
