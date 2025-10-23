@@ -85,7 +85,7 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
         # Choose best z on IS; evaluate OOS with BB confirmation
         z_best, metrics_is, metrics_oos = grid_search_best_z(
             pair_name, z_series_tf, price_df_tf, x_name, y_name, alpha, beta, z_grid,
-            stop_extra=0.5, commission_per_leg=0.01, split_at_middle=True
+            stop_extra=0.3, commission_per_leg=0.01, split_at_middle=True
         )
 
         mid = len(z_series_tf.dropna()) // 2
@@ -93,7 +93,7 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
         price_oos = price_df_tf.iloc[mid:]
         trades_oos_bb = simulate_pair_trades(
             pair_name, z_oos, price_oos, x_name, y_name, alpha, beta, z_best,
-            stop_extra=0.5, commission_per_leg=0.01, confirm='bb'
+            stop_extra=0.3, commission_per_leg=0.01, confirm='bb'
         )
         metrics_oos_bb = trades_to_metrics(trades_oos_bb)
 

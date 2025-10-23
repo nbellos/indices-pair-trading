@@ -1,25 +1,26 @@
-# Pair Trading Strategy (Cointegration + Grid + Bollinger)
+# Indices Pair Trading Strategy
 
-Robust pair trading pipeline using Engle–Granger cointegration, dynamic z-scores (rolling/expanding), grid search to optimize z-entry, and Bollinger Band confirmation. Includes configurable timeframe (Daily/Weekly/Monthly), commissions, and comprehensive outputs (CSV + plots + aggregate summary).
+A comprehensive quantitative trading system that identifies cointegrated index pairs and implements a sophisticated pair trading strategy using z-score signals with Bollinger Bands confirmation. The system performs rigorous statistical analysis, optimizes entry thresholds via grid search, and provides detailed backtesting results with comprehensive performance metrics.
 
 ## Project Structure
 
 ```
-pair-trading-strategy/
+indices-pair-trading/
 ├── data/
-│   ├── indices final.xlsx            # Excel source (auto-converted if CSV missing)
-│   └── indices_eur.csv               # CSV data (Date + columns of indices)
+│   ├── indices final.xlsx            # Original Excel data file
+│   └── indices_eur.csv               # Processed CSV data (Date + European indices)
 ├── scripts/
-│   ├── check_cointegration.py        # ADF, Engle–Granger, z-scores (rolling/expanding)
-│   ├── backtest_grid.py              # Grid search + trade sim + metrics + plotting utils
-│   ├── run_strategy.py               # Unified orchestrator (cointegration → grid+BB → backtest → outputs)
-│   └── run_grid_bb_thresholds.py     # Threshold selection + OOS BB evaluation only
+│   ├── check_cointegration.py        # Cointegration analysis & z-score calculation
+│   ├── backtest_grid.py              # Core backtesting engine with grid search
+│   ├── run_strategy.py               # Main strategy runner (recommended)
+│   ├── run_grid_bb_thresholds.py     # Simplified threshold optimizer
+│   └── parametric_normal_stub.py     # Utility functions
 ├── outputs/
-│   ├── cointegration_results/
-│   ├── price_series/
-│   ├── z_scores/
-│   ├── z_scores_data/
-│   └── grid_backtest/
+│   ├── cointegration_results/        # Statistical test results
+│   ├── price_series/                 # Price visualization plots
+│   ├── z_scores/                     # Z-score analysis plots
+│   ├── z_scores_data/                # Z-score time series data
+│   └── grid_backtest/                # Backtesting results & performance metrics
 ├── requirements.txt
 └── README.md
 ```
@@ -45,70 +46,84 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Quick Start (Unified Strategy)
+### Main Strategy (Recommended)
 
-Run cointegration, select best z-entry per pair via grid search, backtest with BB confirmation, and export CSV + plots + aggregate summary.
+The primary strategy combines cointegration analysis, grid search optimization, and Bollinger Bands confirmation:
 
 ```bash
 cd scripts
-# Daily + rolling z-scores
+# Daily timeframe with rolling z-scores (default)
 python3 run_strategy.py --z rolling --tf D
 
-# Weekly + expanding z-scores
+# Weekly timeframe with expanding z-scores
 python3 run_strategy.py --z expanding --tf W
 
-# Monthly + rolling z-scores
+# Monthly timeframe with rolling z-scores
 python3 run_strategy.py --z rolling --tf M
 ```
 
-### Thresholds Only (no plots nor aggregate)
+### Alternative: Threshold Optimization Only
+
+For quick threshold optimization without comprehensive outputs:
+
 ```bash
-# Finds best z-entry (IS) and evaluates OOS with BB confirmation
-python3 run_grid_bb_thresholds.py --z rolling --tf W
+# Find optimal z-score thresholds only
+python3 run_grid_bb_thresholds.py --z rolling --tf D
 ```
 
-### Workflow
+**Note**: `run_strategy.py` is the recommended approach as it provides comprehensive analysis, plotting, and aggregate performance metrics.
 
-The complete pipeline performs the following operations:
+## Strategy Overview
 
-#### Phase 1: Cointegration Analysis (`check_cointegration.py`)
-1. **Data Loading**: Reads price data from `data/indices_eur.csv` (auto-converts from Excel if needed)
-2. **Log Transformation**: Converts price series to log-prices for stationarity analysis
-3. **Unit Root Testing**: Applies Augmented Dickey-Fuller (ADF) test to identify I(1) series
-4. **Correlation Prefilter**: Only test pairs with |Pearson corr| ≥ 0.8 on aligned log-prices
-5. **Cointegration Testing**: Tests filtered I(1) pairs using Engle–Granger methodology
-6. **Z-Score Calculation**: Computes normalized spreads using rolling and/or expanding windows (controlled via `--z`)
-7. **Output Generation**: Saves cointegration results, plots, and z-score data
+This system implements a sophisticated pair trading strategy that combines:
 
-#### Phase 2: Grid + Backtest (`run_strategy.py` / `backtest_grid.py`)
-1. **Grid Search (IS)**: z-entry ∈ [1.00, 2.00] step 0.05, maximize net PnL (with commissions)
-2. **OOS Backtest**: Apply chosen z-entry to second half, with BB confirmation and BB-based stops
-3. **Position Sizing**: Trade 1 unit of Y vs β units of X (β from cointegration)
-4. **Costs**: Commission per leg = 0.01, charged on both entry and exit for both legs
-5. **Exits**: z crosses 0 (profit) or BB-based stop (outer band ± 0.5σ)
-6. **Plots**: Save z-score and spread plots with entry/exit markers (no GUI)
-7. **Summary**: Save per-pair CSV and an aggregate summary (see below)
+1. **Statistical Foundation**: Engle-Granger cointegration testing to identify mean-reverting pairs
+2. **Dynamic Z-Scores**: Rolling or expanding window z-score calculation to avoid look-ahead bias
+3. **Grid Search Optimization**: Systematic testing of z-score thresholds (1.00 to 2.00) to find optimal entry points
+4. **Bollinger Bands Confirmation**: Additional signal filtering using spread-based Bollinger Bands
+5. **Risk Management**: Stop-losses and profit targets based on both z-scores and Bollinger Bands
+
+### Complete Workflow
+
+#### Phase 1: Cointegration Analysis
+1. **Data Processing**: Load European indices data and convert to log-prices
+2. **Stationarity Testing**: Apply ADF tests to identify I(1) non-stationary series
+3. **Correlation Filtering**: Pre-filter pairs with correlation ≥ 0.8
+4. **Cointegration Testing**: Use Engle-Granger methodology to find cointegrated pairs
+5. **Z-Score Generation**: Calculate rolling/expanding window z-scores for trading signals
+
+#### Phase 2: Strategy Optimization & Backtesting
+1. **Grid Search**: Test z-score thresholds from 1.00 to 2.00 (step 0.05) on in-sample data
+2. **Optimization**: Select threshold that maximizes net P&L
+3. **Out-of-Sample Testing**: Apply optimal threshold to second half of data
+4. **Bollinger Bands Confirmation**: Require spread to exceed BB bands for entry
+5. **Trade Simulation**: Execute trades with realistic position sizing and commissions
+6. **Performance Analysis**: Calculate comprehensive metrics and generate visualizations
+
+### Key Features
+
+- **Dual Confirmation**: Z-score signals + Bollinger Bands confirmation
+- **Dynamic Parameters**: Rolling/expanding window estimation prevents look-ahead bias
+- **Realistic Trading**: Includes commissions, position sizing, and risk management
+- **Comprehensive Outputs**: CSV results, performance plots, and aggregate summaries
+- **Multiple Timeframes**: Daily, weekly, or monthly analysis
+- **Statistical Rigor**: Proper cointegration testing and stationarity analysis
 
 ### Output Files
 
-All outputs are timestamped (`YYYYMMDD_HHMMSS`) and saved to `outputs/`:
+All outputs are timestamped and organized in the `outputs/` directory:
 
-#### Cointegration Outputs
-| File | Description |
-|------|-------------|
-| `cointegration_results_*.csv` | Full test results for all pairs (α, β, ADF statistics, p-values) |
-| `price_series_*.png` | Raw price plots for all indices |
-| `z_scores_*.png` | Z-scores (rolling and/or expanding per selection) with ±2σ bands |
-| `z_scores_all_pairs_*.csv` | Combined z-score time series for all cointegrated pairs |
+#### Analysis Results
+- `cointegration_results_*.csv` - Statistical test results for all pairs
+- `price_series_*.png` - Price evolution plots for all indices
+- `z_scores_*.png` - Z-score analysis with statistical bands
+- `z_scores_all_pairs_*.csv` - Complete z-score time series data
 
-#### Backtest / Threshold Outputs
-| File | Description |
-|------|-------------|
-| `grid_bb_thresholds_*.csv` | Best z-entry per pair (IS) + OOS BB metrics (from `run_grid_bb_thresholds.py`) |
-| `strategy_grid_bb_*.csv` | Per-pair results from unified strategy (IS/OOS metrics) |
-| `summary_*.json/csv` | Aggregate summary across pairs (see Metrics) |
-| `z_with_trades_*_{ROLL/EXP}_{D/W/M}_*.png` | Z-score plot with entry/exit marks |
-| `sample_trades_*_{ROLL/EXP}_{D/W/M}_*.png` | Spread plot with entry/exit marks |
+#### Backtesting Results
+- `strategy_grid_bb_*.csv` - Detailed per-pair performance metrics
+- `summary_*.json/csv` - Aggregate performance summary across all pairs
+- `z_with_trades_*_*.png` - Z-score plots with trade entry/exit markers
+- `sample_trades_*_*.png` - Spread plots showing actual trade executions
 
 ## Mathematical Methodology
 
@@ -199,35 +214,41 @@ Where:
 
 ### 5. Trading Signal Generation
 
-#### 5.1 Entry Rules
+#### 5.1 Entry Rules (with Bollinger Bands Confirmation)
 
-| Condition | Signal | Position | Interpretation |
-|-----------|--------|----------|----------------|
-| $Z_t < -2$ | LONG SPREAD | Buy $Y$, Sell $X$ | Spread undervalued, expect upward reversion |
-| $Z_t > +2$ | SHORT SPREAD | Sell $Y$, Buy $X$ | Spread overvalued, expect downward reversion |
-| $-2 \leq Z_t \leq +2$ | NO ENTRY | Flat | Spread within normal range |
+| Z-Score Condition | Bollinger Bands Condition | Signal | Position | Interpretation |
+|-------------------|---------------------------|--------|----------|----------------|
+| $Z_t \leq -z_{entry}$ | Spread $\leq$ Lower BB | LONG SPREAD | +1 unit Y, -β units X | Spread undervalued, expect upward reversion |
+| $Z_t \geq +z_{entry}$ | Spread $\geq$ Upper BB | SHORT SPREAD | -1 unit Y, +β units X | Spread overvalued, expect downward reversion |
+| Other cases | - | NO ENTRY | Flat | Insufficient signal strength |
+
+**Where:**
+- $z_{entry}$ is optimized via grid search (typically 1.00 to 2.00)
+- Bollinger Bands: 20-period moving average ± 1.0 standard deviation
+- Both conditions must be met for trade entry
 
 #### 5.2 Exit Rules
 
 | Condition | Action | Reason |
 |-----------|--------|--------|
-| $Z_t \to 0$ (crosses threshold) | Close position | Mean reversion complete |
-| $\|Z_t\| > 3$ | Force exit (stop-loss) | Risk management: spread diverging |
-| Days held $\geq$ max holding | Force exit | Time-based stop |
+| $Z_t \to 0$ (crosses zero) | Close position | Mean reversion complete |
+| BB Stop-loss hit | Force exit | Spread exceeds BB ± 0.5σ bands |
+| Z-score stop-loss | Force exit | $|Z_t| \geq |Z_{entry}| + 0.3$ |
 
 #### 5.3 Risk Management Parameters
 
 **Default Configuration:**
-- Entry thresholds: $Z_t = \pm 2.0$ (±2 standard deviations)
+- Entry thresholds: Optimized via grid search (1.00 to 2.00)
 - Exit threshold: $Z_t = 0.0$ (mean reversion)
-- Stop loss: $\|Z_t\| = 3.0$ (±3 standard deviations)
-- Max holding period: 60 trading days
+- BB Stop-loss: ±0.5σ beyond main Bollinger Bands
+- Z-score Stop-loss: $|Z_{entry}| + 0.3$
+- Commission: 0.01 per leg (entry and exit)
+- Position sizing: Market-neutral (1 unit Y vs β units X)
 
-These parameters can be adjusted based on:
-- Historical signal performance
-- Market volatility regime
-- Risk tolerance
-- Capital constraints
+**Optimization Process:**
+- Grid search tests 21 different z-score thresholds
+- Selects threshold that maximizes net P&L on in-sample data
+- Evaluates performance on out-of-sample data
 
 ## Data Format
 
@@ -244,21 +265,34 @@ Input CSV must follow this structure:
 - Subsequent columns: Price series for each instrument
 - Frequency: Any (daily, weekly, monthly) - algorithm adapts automatically
 
-## CLI Options
+## Command Line Options
 
-`run_strategy.py`
-```
---z {rolling,expanding}    # z-score source
---tf {D,W,M}               # timeframe: Daily, Weekly(Fri), Monthly(end)
+### Main Strategy Runner (`run_strategy.py`)
+```bash
+python3 run_strategy.py [options]
+
+Options:
+  --z {rolling,expanding}    Z-score calculation method
+                             rolling: 5-year rolling window (adaptive)
+                             expanding: recursive estimation (stable)
+  --tf {D,W,M}              Timeframe for analysis
+                             D: Daily (default)
+                             W: Weekly (Friday close)
+                             M: Monthly (end of month)
+
+Default: --z rolling --tf D
 ```
 
-`run_grid_bb_thresholds.py`
-```
---z {rolling,expanding}
---tf {D,W,M}
-```
+### Threshold Optimizer (`run_grid_bb_thresholds.py`)
+```bash
+python3 run_grid_bb_thresholds.py [options]
 
-Defaults: `--z rolling --tf D`.
+Options:
+  --z {rolling,expanding}    Same as above
+  --tf {D,W,M}              Same as above
+
+Note: This script provides threshold optimization only, without comprehensive outputs.
+```
 
 ## Dependencies
 
@@ -313,25 +347,34 @@ The unified run saves an aggregate summary (`outputs/grid_backtest/summary_*.{cs
 
 Sharpe is reported per pair (proxy). Portfolio-level risk metrics (e.g., drawdown, portfolio Sharpe) can be added in future work.
 
-## Development Roadmap
+## Current Status & Roadmap
 
-### Completed ✅
-- [x] Engle–Granger cointegration testing (+ corr prefilter)
-- [x] Dynamic z-score calculation (rolling/expanding OLS)
-- [x] Grid search for z-entry + OOS backtest with BB confirmation
-- [x] Commissions in PnL and per-trade metrics
-- [x] Unified runner + plots + aggregate summary
+### Completed Features ✅
+- [x] **Cointegration Analysis**: Engle-Granger testing with correlation pre-filtering
+- [x] **Dynamic Z-Scores**: Rolling and expanding window calculation to prevent look-ahead bias
+- [x] **Grid Search Optimization**: Systematic testing of z-score thresholds (1.00 to 2.00)
+- [x] **Bollinger Bands Integration**: Dual confirmation system for entry signals
+- [x] **Comprehensive Backtesting**: Realistic trading simulation with commissions and risk management
+- [x] **Performance Analytics**: Detailed metrics, visualizations, and aggregate summaries
+- [x] **Multiple Timeframes**: Daily, weekly, and monthly analysis capabilities
+- [x] **Automated Workflow**: Single-command execution with comprehensive outputs
 
-### In Progress 🚧
-- [ ] Portfolio-level risk (drawdown, volatility, portfolio Sharpe/Sortino)
-- [ ] CLI flags for BB params, stop_extra, commission, max-hold
+### Potential Enhancements 🔮
+- [ ] **Portfolio-Level Risk Metrics**: Portfolio drawdown, volatility, and Sharpe ratios
+- [ ] **Advanced Parameter Tuning**: Configurable BB parameters, stop-losses, and commissions
+- [ ] **Walk-Forward Analysis**: Rolling in-sample/out-of-sample validation
+- [ ] **Multi-Asset Cointegration**: Johansen test for multiple asset relationships
+- [ ] **Dynamic Hedging**: Kalman filter for time-varying beta estimation
+- [ ] **Capital Allocation**: Portfolio optimization and position sizing rules
+- [ ] **Real-Time Integration**: Live data feeds and trading system connectivity
 
-### Future Enhancements 🔮
-- [ ] Walk-forward / rolling IS-OOS
-- [ ] Portfolio optimization & capital allocation rules
-- [ ] Kalman filter (time-varying β)
-- [ ] Johansen test (multi-asset cointegration)
-- [ ] Live trading integration
+### System Capabilities
+
+This system provides a complete quantitative trading framework suitable for:
+- **Research & Development**: Testing new pair trading strategies
+- **Backtesting**: Historical performance evaluation with realistic assumptions
+- **Risk Analysis**: Comprehensive risk metrics and scenario analysis
+- **Strategy Optimization**: Systematic parameter tuning and validation
 
 ## References
 
