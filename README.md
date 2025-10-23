@@ -347,34 +347,13 @@ The unified run saves an aggregate summary (`outputs/grid_backtest/summary_*.{cs
 
 Sharpe is reported per pair (proxy). Portfolio-level risk metrics (e.g., drawdown, portfolio Sharpe) can be added in future work.
 
-## Current Status & Roadmap
-
-### Completed Features ✅
-- [x] **Cointegration Analysis**: Engle-Granger testing with correlation pre-filtering
-- [x] **Dynamic Z-Scores**: Rolling and expanding window calculation to prevent look-ahead bias
-- [x] **Grid Search Optimization**: Systematic testing of z-score thresholds (1.00 to 2.00)
-- [x] **Bollinger Bands Integration**: Dual confirmation system for entry signals
-- [x] **Comprehensive Backtesting**: Realistic trading simulation with commissions and risk management
-- [x] **Performance Analytics**: Detailed metrics, visualizations, and aggregate summaries
-- [x] **Multiple Timeframes**: Daily, weekly, and monthly analysis capabilities
-- [x] **Automated Workflow**: Single-command execution with comprehensive outputs
+## Current Roadmap
 
 ### Potential Enhancements 🔮
 - [ ] **Portfolio-Level Risk Metrics**: Portfolio drawdown, volatility, and Sharpe ratios
 - [ ] **Advanced Parameter Tuning**: Configurable BB parameters, stop-losses, and commissions
-- [ ] **Walk-Forward Analysis**: Rolling in-sample/out-of-sample validation
-- [ ] **Multi-Asset Cointegration**: Johansen test for multiple asset relationships
-- [ ] **Dynamic Hedging**: Kalman filter for time-varying beta estimation
 - [ ] **Capital Allocation**: Portfolio optimization and position sizing rules
 - [ ] **Real-Time Integration**: Live data feeds and trading system connectivity
-
-### System Capabilities
-
-This system provides a complete quantitative trading framework suitable for:
-- **Research & Development**: Testing new pair trading strategies
-- **Backtesting**: Historical performance evaluation with realistic assumptions
-- **Risk Analysis**: Comprehensive risk metrics and scenario analysis
-- **Strategy Optimization**: Systematic parameter tuning and validation
 
 ## References
 
