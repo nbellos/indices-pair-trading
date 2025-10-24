@@ -19,6 +19,8 @@ class TradeResult:
     gross_pnl: float
     commission: float
     days_held: int
+    position_size: float = 1.0  # Position size multiplier
+    risk_amount: float = 0.0    # Risk amount for this trade
 
 
 def simulate_pair_trades(
@@ -35,6 +37,8 @@ def simulate_pair_trades(
     confirm: str = 'none',  # 'none' | 'bb'
     bb_window: int = 20,
     bb_num_std: float = 1.0,
+    initial_capital: float = None,  # If provided, enables risk-based position sizing
+    risk_per_trade: float = None,   # Fixed risk amount per trade
 ) -> list:
     """
     Simulate trades on spread Y - (alpha + beta*X) using z-score series.
@@ -67,6 +71,8 @@ def simulate_pair_trades(
     in_pos = 0
     entry_i = None
     entry_z = None
+    position_size = 1.0  # Default position size
+    current_capital = initial_capital if initial_capital is not None else None
 
     for i, date in enumerate(z.index):
         zi = float(z.iloc[i])
@@ -77,6 +83,12 @@ def simulate_pair_trades(
                 if confirm == 'bb':
                     ok = (not pd.isna(upper.iloc[i])) and (spread.iloc[i] >= upper.iloc[i])
                 if ok:
+                    # Calculate position size if risk-based sizing is enabled
+                    if current_capital is not None and risk_per_trade is not None:
+                        position_size = calculate_position_size(
+                            px_x.iloc[i], px_y.iloc[i], beta, zi, z_entry, stop_extra, 
+                            risk_per_trade, confirm, spread.iloc[i], upper_stop.iloc[i] if confirm == 'bb' else None
+                        )
                     in_pos = -1  # short spread
                     entry_i = i
                     entry_z = zi
@@ -85,6 +97,12 @@ def simulate_pair_trades(
                 if confirm == 'bb':
                     ok = (not pd.isna(lower.iloc[i])) and (spread.iloc[i] <= lower.iloc[i])
                 if ok:
+                    # Calculate position size if risk-based sizing is enabled
+                    if current_capital is not None and risk_per_trade is not None:
+                        position_size = calculate_position_size(
+                            px_x.iloc[i], px_y.iloc[i], beta, zi, z_entry, stop_extra, 
+                            risk_per_trade, confirm, spread.iloc[i], lower_stop.iloc[i] if confirm == 'bb' else None
+                        )
                     in_pos = 1   # long spread
                     entry_i = i
                     entry_z = zi
@@ -101,20 +119,60 @@ def simulate_pair_trades(
                     stop_hit = True
             if stop_hit:
                 exit_i = i
-                trades.append(_close_trade(pair_name, in_pos, entry_i, exit_i, entry_z, zi, z, px_x, px_y, beta, commission_per_leg))
+                trade_result = _close_trade(pair_name, in_pos, entry_i, exit_i, entry_z, zi, z, px_x, px_y, beta, commission_per_leg, position_size, risk_per_trade)
+                trades.append(trade_result)
+                # Update capital if risk-based sizing is enabled
+                if current_capital is not None:
+                    current_capital += trade_result.pnl
                 in_pos = 0
                 entry_i = None
                 entry_z = None
+                position_size = 1.0
                 continue
             # profit exit at z crossing 0
             if (in_pos == 1 and zi >= 0) or (in_pos == -1 and zi <= 0):
                 exit_i = i
-                trades.append(_close_trade(pair_name, in_pos, entry_i, exit_i, entry_z, zi, z, px_x, px_y, beta, commission_per_leg))
+                trade_result = _close_trade(pair_name, in_pos, entry_i, exit_i, entry_z, zi, z, px_x, px_y, beta, commission_per_leg, position_size, risk_per_trade)
+                trades.append(trade_result)
+                # Update capital if risk-based sizing is enabled
+                if current_capital is not None:
+                    current_capital += trade_result.pnl
                 in_pos = 0
                 entry_i = None
                 entry_z = None
+                position_size = 1.0
 
     return trades
+
+
+def calculate_position_size(px_x, px_y, beta, entry_z, z_entry, stop_extra, risk_amount, confirm, spread, stop_level):
+    """
+    Calculate position size so that maximum loss equals fixed risk_amount (e.g., €100).
+    
+    For a spread trade: PnL = position_size * (spread_exit - spread_entry)
+    We want: max_loss = position_size * max_spread_move = risk_amount
+    
+    So: position_size = risk_amount / max_spread_move
+    """
+    if confirm == 'bb':
+        # BB-based stop: calculate spread move to stop level
+        if entry_z > 0:  # Short spread
+            max_spread_move = abs(stop_level - spread) if stop_level is not None else 0
+        else:  # Long spread
+            max_spread_move = abs(spread - stop_level) if stop_level is not None else 0
+    else:
+        # Z-score based stop: estimate spread move from z-score move
+        z_stop = abs(entry_z) + stop_extra
+        z_move = z_stop - abs(entry_z)
+        # Estimate spread volatility from current prices (simplified)
+        spread_vol = (px_y + abs(beta) * px_x) * 0.01  # Rough estimate: 1% of combined value
+        max_spread_move = z_move * spread_vol
+    
+    if max_spread_move <= 0:
+        return 1.0  # Default position size if calculation fails
+    
+    position_size = risk_amount / max_spread_move
+    return position_size
 
 
 def plot_trades_z_series(
@@ -311,6 +369,8 @@ def _close_trade(
     px_y: pd.Series,
     beta: float,
     commission_per_leg: float,
+    position_size: float = 1.0,
+    risk_amount: float = None,
 ) -> TradeResult:
     idx = z.index
     e_date = idx[entry_i]
@@ -319,18 +379,18 @@ def _close_trade(
     y_x = float(px_y.loc[x_date])
     x_e = float(px_x.loc[e_date])
     x_x = float(px_x.loc[x_date])
-    # Position legs: 1 on Y, beta on X
+    # Position legs: position_size on Y, position_size*beta on X
     if direction == 1:
         # Long spread: +Y, -beta*X
-        leg_y = (y_x - y_e)
-        leg_x = -beta * (x_x - x_e)
+        leg_y = position_size * (y_x - y_e)
+        leg_x = -position_size * beta * (x_x - x_e)
     else:
         # Short spread: -Y, +beta*X
-        leg_y = -(y_x - y_e)
-        leg_x = beta * (x_x - x_e)
+        leg_y = -position_size * (y_x - y_e)
+        leg_x = position_size * beta * (x_x - x_e)
     gross = leg_y + leg_x
-    # Commissions: entry and exit, both legs
-    commission = 2 * commission_per_leg * (1 + abs(beta))
+    # Commissions: entry and exit, both legs, scaled by position size
+    commission = 2 * commission_per_leg * position_size * (1 + abs(beta))
     pnl = gross - commission
     days_held = (x_date - e_date).days
     return TradeResult(
@@ -344,6 +404,8 @@ def _close_trade(
         gross_pnl=gross,
         commission=commission,
         days_held=days_held,
+        position_size=position_size,
+        risk_amount=risk_amount if risk_amount is not None else 0.0,
     )
 
 
@@ -360,11 +422,17 @@ def trades_to_metrics(trades: list) -> dict:
             'avg_loss': 0.0,
             'avg_days': 0.0,
             'sharpe': 0.0,
+            'max_loss': 0.0,
+            'avg_position_size': 1.0,
+            'total_risk': 0.0,
         }
     pnl_series = pd.Series([t.pnl for t in trades])
     wins = pnl_series[pnl_series > 0]
     losses = pnl_series[pnl_series <= 0]
     avg_days = np.mean([t.days_held for t in trades]) if trades else 0.0
+    avg_position_size = np.mean([t.position_size for t in trades]) if trades else 1.0
+    total_risk = sum([t.risk_amount for t in trades]) if trades else 0.0
+    max_loss = min([t.pnl for t in trades]) if trades else 0.0
     # Proxy daily returns from per-trade pnl normalized by |beta|+1 notionally ~ 2 legs; simple ratio
     ret_series = pnl_series
     sharpe = 0.0
@@ -381,6 +449,9 @@ def trades_to_metrics(trades: list) -> dict:
         'avg_loss': float(losses.mean()) if not losses.empty else 0.0,
         'avg_days': float(avg_days),
         'sharpe': float(sharpe),
+        'max_loss': float(max_loss),
+        'avg_position_size': float(avg_position_size),
+        'total_risk': float(total_risk),
     }
 
 
@@ -396,6 +467,8 @@ def grid_search_best_z(
     stop_extra: float = 0.5,
     commission_per_leg: float = 0.01,
     split_at_middle: bool = False,
+    initial_capital: float = None,
+    risk_per_trade: float = None,
 ):
     """
     Run grid search on z_entry list. If split_at_middle=True, choose best on first half,
@@ -414,19 +487,19 @@ def grid_search_best_z(
         prices_oos = prices.iloc[mid:]
         best = None
         for ze in z_grid:
-            trades = simulate_pair_trades(pair_name, z_is, prices_is, x_name, y_name, alpha, beta, ze, stop_extra, commission_per_leg)
+            trades = simulate_pair_trades(pair_name, z_is, prices_is, x_name, y_name, alpha, beta, ze, stop_extra, commission_per_leg, initial_capital=initial_capital, risk_per_trade=risk_per_trade)
             metrics = trades_to_metrics(trades)
             score = metrics['net_pnl']
             if best is None or score > best['score']:
                 best = {'z_entry': ze, 'score': score, 'metrics': metrics}
         # Evaluate on OOS
-        trades_oos = simulate_pair_trades(pair_name, z_oos, prices_oos, x_name, y_name, alpha, beta, best['z_entry'], stop_extra, commission_per_leg)
+        trades_oos = simulate_pair_trades(pair_name, z_oos, prices_oos, x_name, y_name, alpha, beta, best['z_entry'], stop_extra, commission_per_leg, initial_capital=initial_capital, risk_per_trade=risk_per_trade)
         metrics_oos = trades_to_metrics(trades_oos)
         return best['z_entry'], best['metrics'], metrics_oos
     else:
         best = None
         for ze in z_grid:
-            trades = simulate_pair_trades(pair_name, z, prices, x_name, y_name, alpha, beta, ze, stop_extra, commission_per_leg)
+            trades = simulate_pair_trades(pair_name, z, prices, x_name, y_name, alpha, beta, ze, stop_extra, commission_per_leg, initial_capital=initial_capital, risk_per_trade=risk_per_trade)
             metrics = trades_to_metrics(trades)
             score = metrics['net_pnl']
             if best is None or score > best['score']:

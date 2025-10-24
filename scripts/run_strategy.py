@@ -34,7 +34,7 @@ def resample_to_timeframe(z_series: pd.Series, prices_df: pd.DataFrame, timefram
     return z_res.loc[common], px_res.loc[common]
 
 
-def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
+def run_strategy(z_type: str = 'rolling', timeframe: str = 'D', initial_capital: float = None, risk_per_trade: float = None):
     # Pass mode to cointegration to skip extra logs/computation
     z_mode = 'rolling' if z_type.lower() == 'rolling' else ('expanding' if z_type.lower() == 'expanding' else 'both')
     df, df_log, pairs, z_roll, z_exp = run_cointegration(z_mode=z_mode)
@@ -66,11 +66,30 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
         'sum_win': 0.0,
         'sum_loss': 0.0,
         'sum_days': 0.0,
+        'total_risk': 0.0,
+        'max_loss': 0.0,
     }
 
     z_dict = z_roll if z_type.lower() == 'rolling' else z_exp
     merged_price_items = []
     merged_z_items = []
+    
+    # Print strategy configuration
+    if initial_capital is not None and risk_per_trade is not None:
+        print(f"Running strategy with risk-based position sizing:")
+        print(f"- Initial capital: €{initial_capital:,.0f}")
+        print(f"- Fixed risk per trade: €{risk_per_trade:.0f}")
+        print(f"- Z-score method: {z_type}")
+        print(f"- Timeframe: {timeframe}")
+        print(f"- Number of cointegrated pairs: {len(pairs)}")
+        print("-" * 50)
+    else:
+        print(f"Running strategy with standard position sizing:")
+        print(f"- Z-score method: {z_type}")
+        print(f"- Timeframe: {timeframe}")
+        print(f"- Number of cointegrated pairs: {len(pairs)}")
+        print("-" * 50)
+    
     for pair_name, z_series in z_dict.items():
         x_name, y_name = pair_name.split(' - ')[0], pair_name.split(' - ')[1]
         alpha, beta = pair_to_params[pair_name]
@@ -85,7 +104,8 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
         # Choose best z on IS; evaluate OOS with BB confirmation
         z_best, metrics_is, metrics_oos = grid_search_best_z(
             pair_name, z_series_tf, price_df_tf, x_name, y_name, alpha, beta, z_grid,
-            stop_extra=0.3, commission_per_leg=0.01, split_at_middle=True
+            stop_extra=0.3, commission_per_leg=0.01, split_at_middle=True,
+            initial_capital=initial_capital, risk_per_trade=risk_per_trade
         )
 
         mid = len(z_series_tf.dropna()) // 2
@@ -93,7 +113,8 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
         price_oos = price_df_tf.iloc[mid:]
         trades_oos_bb = simulate_pair_trades(
             pair_name, z_oos, price_oos, x_name, y_name, alpha, beta, z_best,
-            stop_extra=0.3, commission_per_leg=0.01, confirm='bb'
+            stop_extra=0.3, commission_per_leg=0.01, confirm='bb',
+            initial_capital=initial_capital, risk_per_trade=risk_per_trade
         )
         metrics_oos_bb = trades_to_metrics(trades_oos_bb)
 
@@ -137,6 +158,8 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
         agg['num_trades'] += metrics_oos_bb['num_trades']
         agg['win_trades'] += metrics_oos_bb['win_trades']
         agg['loss_trades'] += metrics_oos_bb['loss_trades']
+        agg['total_risk'] += metrics_oos_bb.get('total_risk', 0.0)
+        agg['max_loss'] = min(agg['max_loss'], metrics_oos_bb.get('max_loss', 0.0))
         if metrics_oos_bb['avg_win'] > 0 and metrics_oos_bb['win_trades'] > 0:
             agg['sum_win'] += metrics_oos_bb['avg_win'] * metrics_oos_bb['win_trades']
         if metrics_oos_bb['avg_loss'] < 0 and metrics_oos_bb['loss_trades'] > 0:
@@ -166,6 +189,8 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
     summary = {
         'z_source': z_type,
         'timeframe': timeframe,
+        'initial_capital': initial_capital,
+        'risk_per_trade': risk_per_trade,
         'total_net_pnl': round(agg['net_pnl'], 4),
         'total_gross_pnl': round(agg['gross_pnl'], 4),
         'total_commission': round(agg['commission'], 4),
@@ -177,6 +202,8 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
         'avg_loss': round(avg_loss, 4),
         'profit_factor': round(profit_factor, 4) if np.isfinite(profit_factor) else None,
         'avg_days': round(avg_days, 4),
+        'total_risk': round(agg['total_risk'], 4),
+        'max_loss': round(agg['max_loss'], 4),
     }
     # Save summary CSV and JSON
     import json
@@ -185,8 +212,19 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D'):
     pd.DataFrame([summary]).to_csv(summary_csv, index=False)
     with open(summary_json, 'w') as f:
         json.dump(summary, f, indent=2)
-    print("Aggregate summary:")
-    print(summary)
+    print("\n" + "="*60)
+    print("STRATEGY SUMMARY")
+    print("="*60)
+    if initial_capital is not None and risk_per_trade is not None:
+        print(f"Risk per trade: €{risk_per_trade:.0f}")
+    print(f"Total trades: {agg['num_trades']}")
+    print(f"Win rate: {win_rate:.1%}")
+    print(f"Total P&L: {agg['net_pnl']:.2f}")
+    if initial_capital is not None and risk_per_trade is not None:
+        print(f"Total risk taken: {agg['total_risk']:.2f}")
+        print(f"Maximum single loss: {agg['max_loss']:.2f}")
+    print(f"Profit factor: {profit_factor:.2f}" if np.isfinite(profit_factor) else "Profit factor: N/A")
+    print(f"Average days held: {avg_days:.1f}")
     print(f"Saved summary to {summary_csv} and {summary_json}")
 
 
@@ -194,5 +232,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run pair trading strategy with Grid+BB backtest.')
     parser.add_argument('--z', choices=['rolling', 'expanding'], default='rolling', help='Z-score source')
     parser.add_argument('--tf', choices=['D', 'W', 'M'], default='D', help='Timeframe: Daily (D), Weekly (W), Monthly (M)')
+    parser.add_argument('--capital', type=float, default=None, help='Initial capital amount in euros (enables risk-based position sizing)')
+    parser.add_argument('--risk', type=float, default=None, help='Fixed risk amount per trade in euros (requires --capital)')
     args = parser.parse_args()
-    run_strategy(z_type=args.z, timeframe=args.tf)
+    
+    # Validate risk parameters
+    if args.risk is not None and args.capital is None:
+        print("Error: --risk requires --capital to be specified")
+        exit(1)
+    
+    run_strategy(z_type=args.z, timeframe=args.tf, initial_capital=args.capital, risk_per_trade=args.risk)
