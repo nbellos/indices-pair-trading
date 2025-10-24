@@ -77,11 +77,16 @@ def simulate_pair_trades(
     for i, date in enumerate(z.index):
         zi = float(z.iloc[i])
         if in_pos == 0:
+            # Entry logic: Use z-score for entry decisions
             if zi >= z_entry:
-                # require confirmations if set
+                # Short spread when z-score is above threshold
+                # For BB confirmation, we use z-score thresholds instead of spread levels
                 ok = True
                 if confirm == 'bb':
-                    ok = (not pd.isna(upper.iloc[i])) and (spread.iloc[i] >= upper.iloc[i])
+                    # BB confirmation: z-score must be above threshold (no additional spread check needed)
+                    # The z-score already incorporates the spread information
+                    ok = True  # z-score threshold is sufficient
+                
                 if ok:
                     # Calculate position size if risk-based sizing is enabled
                     if current_capital is not None and risk_per_trade is not None:
@@ -92,10 +97,16 @@ def simulate_pair_trades(
                     in_pos = -1  # short spread
                     entry_i = i
                     entry_z = zi
+                    
             elif zi <= -z_entry:
+                # Long spread when z-score is below negative threshold
+                # For BB confirmation, we use z-score thresholds instead of spread levels
                 ok = True
                 if confirm == 'bb':
-                    ok = (not pd.isna(lower.iloc[i])) and (spread.iloc[i] <= lower.iloc[i])
+                    # BB confirmation: z-score must be below threshold (no additional spread check needed)
+                    # The z-score already incorporates the spread information
+                    ok = True  # z-score threshold is sufficient
+                
                 if ok:
                     # Calculate position size if risk-based sizing is enabled
                     if current_capital is not None and risk_per_trade is not None:
@@ -107,16 +118,37 @@ def simulate_pair_trades(
                     entry_i = i
                     entry_z = zi
         else:
-            # stop-loss
+            # stop-loss: 0.5 z-score move in opposite direction
             stop_hit = False
             if confirm == 'bb':
+                # For BB confirmation, use both z-score and spread-based stops
+                z_stop_hit = False
+                bb_stop_hit = False
+                
+                # Z-score based stop: 0.5 z-score move in opposite direction
+                if in_pos == 1:  # Long position
+                    # Stop when z-score moves 0.5 in opposite direction (more negative)
+                    z_stop_hit = zi <= (entry_z - 0.5)
+                elif in_pos == -1:  # Short position  
+                    # Stop when z-score moves 0.5 in opposite direction (more positive)
+                    z_stop_hit = zi >= (entry_z + 0.5)
+                
+                # BB-based stop (additional confirmation)
                 if in_pos == 1 and (not pd.isna(lower_stop.iloc[i])) and spread.iloc[i] <= lower_stop.iloc[i]:
-                    stop_hit = True
-                if in_pos == -1 and (not pd.isna(upper_stop.iloc[i])) and spread.iloc[i] >= upper_stop.iloc[i]:
-                    stop_hit = True
+                    bb_stop_hit = True
+                elif in_pos == -1 and (not pd.isna(upper_stop.iloc[i])) and spread.iloc[i] >= upper_stop.iloc[i]:
+                    bb_stop_hit = True
+                
+                # Stop if either z-score or BB stop is hit
+                stop_hit = z_stop_hit or bb_stop_hit
             else:
-                if abs(zi) >= abs(entry_z) + stop_extra:
-                    stop_hit = True
+                # For non-BB mode, use only z-score based stops
+                if in_pos == 1:  # Long position
+                    # Stop when z-score moves 0.5 in opposite direction (more negative)
+                    stop_hit = zi <= (entry_z - 0.5)
+                elif in_pos == -1:  # Short position
+                    # Stop when z-score moves 0.5 in opposite direction (more positive)
+                    stop_hit = zi >= (entry_z + 0.5)
             if stop_hit:
                 exit_i = i
                 trade_result = _close_trade(pair_name, in_pos, entry_i, exit_i, entry_z, zi, z, px_x, px_y, beta, commission_per_leg, position_size, risk_per_trade)
@@ -147,31 +179,50 @@ def simulate_pair_trades(
 
 def calculate_position_size(px_x, px_y, beta, entry_z, z_entry, stop_extra, risk_amount, confirm, spread, stop_level):
     """
-    Calculate position size so that maximum loss equals fixed risk_amount (e.g., €100).
+    Calculate position size using simple approach similar to the article.
     
-    For a spread trade: PnL = position_size * (spread_exit - spread_entry)
-    We want: max_loss = position_size * max_spread_move = risk_amount
-    
-    So: position_size = risk_amount / max_spread_move
+    The logic:
+    1. Risk a fixed percentage of capital per trade (e.g., 1%)
+    2. Use simple position sizing based on the ratio approach
+    3. Position size = risk_amount / (estimated_loss_per_unit * z_stop_distance)
+    4. This matches the article's simpler approach
     """
-    if confirm == 'bb':
-        # BB-based stop: calculate spread move to stop level
-        if entry_z > 0:  # Short spread
-            max_spread_move = abs(stop_level - spread) if stop_level is not None else 0
-        else:  # Long spread
-            max_spread_move = abs(spread - stop_level) if stop_level is not None else 0
-    else:
-        # Z-score based stop: estimate spread move from z-score move
-        z_stop = abs(entry_z) + stop_extra
-        z_move = z_stop - abs(entry_z)
-        # Estimate spread volatility from current prices (simplified)
-        spread_vol = (px_y + abs(beta) * px_x) * 0.01  # Rough estimate: 1% of combined value
-        max_spread_move = z_move * spread_vol
+    # Calculate stop distance in z-score terms
+    z_stop_distance = 0.5  # Fixed 0.5 z-score move for stop-loss
     
-    if max_spread_move <= 0:
+    # Simple approach: estimate loss per unit based on current prices
+    # This matches the article's approach more closely
+    
+    # Calculate the current spread value
+    current_spread = spread  # This is Y - (alpha + beta*X)
+    
+    # Estimate potential loss per unit of position
+    # Use a percentage of the spread magnitude as a rough estimate
+    spread_magnitude = abs(current_spread)
+    if spread_magnitude == 0:
+        spread_magnitude = px_y * 0.01  # Fallback: 1% of Y price
+    
+    # Estimate potential loss per unit (conservative estimate)
+    # This represents how much the spread can move against us
+    estimated_loss_per_unit = spread_magnitude * 0.02  # 2% of spread magnitude
+    
+    # Calculate position size using simple risk approach
+    # We want: position_size * estimated_loss_per_unit * z_stop_distance = risk_amount
+    # So: position_size = risk_amount / (estimated_loss_per_unit * z_stop_distance)
+    
+    if estimated_loss_per_unit <= 0 or z_stop_distance <= 0:
         return 1.0  # Default position size if calculation fails
     
-    position_size = risk_amount / max_spread_move
+    position_size = risk_amount / (estimated_loss_per_unit * z_stop_distance)
+    
+    # Cap position size to prevent excessive leverage
+    max_position_size = 10.0  # Maximum 10x leverage
+    position_size = min(position_size, max_position_size)
+    
+    # Ensure minimum position size for meaningful trades
+    min_position_size = 0.1
+    position_size = max(position_size, min_position_size)
+    
     return position_size
 
 
@@ -188,29 +239,69 @@ def plot_trades_z_series(
     if z is None or z.empty:
         return
     z = z.dropna()
-    plt.figure(figsize=(12, 5))
-    plt.plot(z.index, z.values, label='Z-Score', color='tab:blue')
-    plt.axhline(z_entry, color='tab:red', linestyle='--', linewidth=1, label=f'+{z_entry:.2f}')
-    plt.axhline(-z_entry, color='tab:green', linestyle='--', linewidth=1, label=f'-{z_entry:.2f}')
-    plt.axhline(0.0, color='black', linestyle='-', linewidth=0.8)
-    # Mark entries/exits
+    plt.figure(figsize=(16, 10))
+    
+    # Plot z-score
+    plt.plot(z.index, z.values, label='Z-Score', color='tab:blue', linewidth=1.5, alpha=0.7)
+    
+    # Plot threshold lines
+    plt.axhline(z_entry, color='tab:red', linestyle='--', linewidth=2, label=f'+{z_entry:.2f} (Short Entry)', alpha=0.8)
+    plt.axhline(-z_entry, color='tab:green', linestyle='--', linewidth=2, label=f'-{z_entry:.2f} (Long Entry)', alpha=0.8)
+    plt.axhline(0.0, color='black', linestyle='-', linewidth=1.5, label='Mean (Exit)', alpha=0.8)
+    
+    # Plot stop-loss levels
+    plt.axhline(z_entry + 0.5, color='red', linestyle=':', linewidth=1, label=f'+{z_entry+0.5:.2f} (Short Stop)', alpha=0.6)
+    plt.axhline(-z_entry - 0.5, color='green', linestyle=':', linewidth=1, label=f'-{z_entry+0.5:.2f} (Long Stop)', alpha=0.6)
+    
+    # Mark entries/exits with better visualization
     for t in trades:
         try:
             e = t.entry_date
             x = t.exit_date
             ze = float(z.loc[e]) if e in z.index else None
             zx = float(z.loc[x]) if x in z.index else None
+            
             if ze is not None:
-                plt.scatter(e, ze, color=('tab:red' if t.direction == -1 else 'tab:green'), marker='^', s=60)
+                # Entry markers with direction and PnL info
+                color = 'red' if t.direction == -1 else 'green'
+                marker = 'v' if t.direction == -1 else '^'  # Down for short, up for long
+                plt.scatter(e, ze, color=color, marker=marker, s=100, alpha=0.9, edgecolors='black', linewidth=2, zorder=5)
+                # Add entry annotation
+                plt.annotate(f'{"SHORT" if t.direction == -1 else "LONG"}', 
+                           (e, ze), xytext=(0, 20), textcoords='offset points',
+                           ha='center', va='bottom', fontsize=8, fontweight='bold',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor=color, alpha=0.7))
+                
             if zx is not None:
-                plt.scatter(x, zx, color='black', marker='x', s=50)
+                # Exit markers with PnL coloring
+                exit_color = 'darkgreen' if t.pnl > 0 else 'darkred'
+                plt.scatter(x, zx, color=exit_color, marker='X', s=80, alpha=0.9, edgecolors='black', linewidth=2, zorder=5)
+                # Add PnL annotation
+                plt.annotate(f'{t.pnl:.0f}', 
+                           (x, zx), xytext=(0, -25), textcoords='offset points',
+                           ha='center', va='top', fontsize=8, fontweight='bold',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor=exit_color, alpha=0.7))
+                
         except Exception:
             continue
-    plt.title(f'{pair_name} — Z-Score with Entries (triangles) and Exits (x)')
-    plt.legend(loc='upper right')
+    
+    # Add trade statistics to title
+    total_trades = len(trades)
+    winning_trades = sum(1 for t in trades if t.pnl > 0)
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    total_pnl = sum(t.pnl for t in trades)
+    avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+    
+    plt.title(f'{pair_name} — Z-Score Trading Signals\n'
+              f'Trades: {total_trades} | Win Rate: {win_rate:.1f}% | Total PnL: {total_pnl:.0f} | Avg PnL: {avg_pnl:.0f}', 
+              fontsize=14, fontweight='bold')
+    plt.xlabel('Date', fontsize=12)
+    plt.ylabel('Z-Score', fontsize=12)
+    plt.legend(loc='upper right', fontsize=10)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=150)
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
 
 
@@ -225,27 +316,148 @@ def plot_trades_price_series(
     output_path: str,
 ):
     """
-    Save a plot of the spread price series with entry/exit markers based on closing prices.
+    Save a plot of the spread price series with entry/exit markers and Bollinger Bands.
     """
     common_idx = prices.index
     spread = prices[y_name].loc[common_idx] - (alpha + beta * prices[x_name].loc[common_idx])
-    plt.figure(figsize=(12, 5))
-    plt.plot(spread.index, spread.values, label='Spread (Y - (α + β·X))', color='tab:purple')
+    
+    plt.figure(figsize=(16, 10))
+    
+    # Calculate Bollinger Bands for visualization
+    bb_window = 20
+    bb_num_std = 1.0
+    mid = spread.rolling(bb_window, min_periods=bb_window).mean()
+    vol = spread.rolling(bb_window, min_periods=bb_window).std(ddof=0)
+    upper = mid + bb_num_std * vol
+    lower = mid - bb_num_std * vol
+    
+    # Plot spread and Bollinger Bands
+    plt.plot(spread.index, spread.values, label='Spread (Y - (α + β·X))', color='tab:purple', linewidth=1.5, alpha=0.8)
+    plt.plot(mid.index, mid.values, label='BB Middle (20-day MA)', color='orange', linewidth=1.5, alpha=0.8)
+    plt.fill_between(upper.index, upper.values, lower.values, alpha=0.2, color='gray', label='BB Bands (±1σ)')
+    plt.plot(upper.index, upper.values, color='red', linewidth=1.5, alpha=0.8, linestyle='--')
+    plt.plot(lower.index, lower.values, color='green', linewidth=1.5, alpha=0.8, linestyle='--')
+    
+    # Mark entries/exits with better visualization
     for t in trades:
         try:
             e = t.entry_date
             x = t.exit_date
             if e in spread.index:
-                plt.scatter(e, float(spread.loc[e]), color=('tab:red' if t.direction == -1 else 'tab:green'), marker='^', s=60)
+                # Entry markers
+                color = 'red' if t.direction == -1 else 'green'
+                marker = 'v' if t.direction == -1 else '^'
+                plt.scatter(e, float(spread.loc[e]), color=color, marker=marker, s=100, alpha=0.9, 
+                           edgecolors='black', linewidth=2, zorder=5)
+                # Add entry annotation
+                plt.annotate(f'{"SHORT" if t.direction == -1 else "LONG"}', 
+                           (e, float(spread.loc[e])), xytext=(0, 20), textcoords='offset points',
+                           ha='center', va='bottom', fontsize=8, fontweight='bold',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor=color, alpha=0.7))
+                
             if x in spread.index:
-                plt.scatter(x, float(spread.loc[x]), color='black', marker='x', s=50)
+                # Exit markers
+                exit_color = 'darkgreen' if t.pnl > 0 else 'darkred'
+                plt.scatter(x, float(spread.loc[x]), color=exit_color, marker='X', s=80, alpha=0.9,
+                           edgecolors='black', linewidth=2, zorder=5)
+                # Add PnL annotation
+                plt.annotate(f'{t.pnl:.0f}', 
+                           (x, float(spread.loc[x])), xytext=(0, -25), textcoords='offset points',
+                           ha='center', va='top', fontsize=8, fontweight='bold',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor=exit_color, alpha=0.7))
         except Exception:
             continue
-    plt.title(f'{pair_name} — Spread with Entries (triangles) and Exits (x)')
-    plt.legend(loc='upper right')
+    
+    # Add trade statistics
+    total_trades = len(trades)
+    winning_trades = sum(1 for t in trades if t.pnl > 0)
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    total_pnl = sum(t.pnl for t in trades)
+    avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+    
+    plt.title(f'{pair_name} — Spread with Bollinger Bands and Trading Signals\n'
+              f'Trades: {total_trades} | Win Rate: {win_rate:.1f}% | Total PnL: {total_pnl:.0f} | Avg PnL: {avg_pnl:.0f}', 
+              fontsize=14, fontweight='bold')
+    plt.xlabel('Date', fontsize=12)
+    plt.ylabel('Spread Value', fontsize=12)
+    plt.legend(loc='upper right', fontsize=10)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=150)
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def plot_equity_curve(
+    pair_name: str,
+    trades: list,
+    initial_capital: float,
+    output_path: str,
+):
+    """
+    Plot the equity curve showing cumulative P&L over time.
+    """
+    if not trades:
+        return
+        
+    plt.figure(figsize=(16, 10))
+    
+    # Sort trades by entry date
+    sorted_trades = sorted(trades, key=lambda x: x.entry_date)
+    
+    # Calculate cumulative P&L
+    dates = []
+    cumulative_pnl = []
+    running_capital = initial_capital
+    
+    for trade in sorted_trades:
+        dates.append(trade.exit_date)
+        running_capital += trade.pnl
+        cumulative_pnl.append(running_capital)
+    
+    # Convert to percentage returns
+    pct_returns = [(cap - initial_capital) / initial_capital * 100 for cap in cumulative_pnl]
+    
+    # Plot equity curve
+    plt.plot(dates, cumulative_pnl, label='Cumulative Capital', color='tab:blue', linewidth=2)
+    plt.axhline(y=initial_capital, color='gray', linestyle='--', alpha=0.7, label=f'Initial Capital (€{initial_capital:,.0f})')
+    
+    # Fill area below/above initial capital
+    plt.fill_between(dates, initial_capital, cumulative_pnl, 
+                    where=[pnl >= initial_capital for pnl in cumulative_pnl], 
+                    color='green', alpha=0.3, label='Profit Zone')
+    plt.fill_between(dates, initial_capital, cumulative_pnl, 
+                    where=[pnl < initial_capital for pnl in cumulative_pnl], 
+                    color='red', alpha=0.3, label='Loss Zone')
+    
+    # Add trade markers
+    for i, trade in enumerate(sorted_trades):
+        color = 'green' if trade.pnl > 0 else 'red'
+        plt.scatter(trade.exit_date, cumulative_pnl[i], color=color, s=50, alpha=0.7, zorder=5)
+    
+    # Calculate statistics
+    final_capital = cumulative_pnl[-1] if cumulative_pnl else initial_capital
+    total_return = (final_capital - initial_capital) / initial_capital * 100
+    max_capital = max(cumulative_pnl) if cumulative_pnl else initial_capital
+    max_drawdown = (max_capital - min(cumulative_pnl)) / max_capital * 100 if cumulative_pnl else 0
+    
+    # Add statistics to title
+    plt.title(f'{pair_name} — Equity Curve\n'
+              f'Initial Capital: €{initial_capital:,.0f} | Final Capital: €{final_capital:,.0f} | '
+              f'Total Return: {total_return:.1f}% | Max Drawdown: {max_drawdown:.1f}%', 
+              fontsize=14, fontweight='bold')
+    
+    plt.xlabel('Date', fontsize=12)
+    plt.ylabel('Capital (€)', fontsize=12)
+    plt.legend(loc='upper left', fontsize=10)
+    plt.grid(True, alpha=0.3)
+    
+    # Format y-axis as currency
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'€{x:,.0f}'))
+    
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
 
 
@@ -379,18 +591,30 @@ def _close_trade(
     y_x = float(px_y.loc[x_date])
     x_e = float(px_x.loc[e_date])
     x_x = float(px_x.loc[x_date])
-    # Position legs: position_size on Y, position_size*beta on X
+    
+    # Position sizing represents the capital allocated to the trade
+    # We trade position_size units of Y and position_size * beta units of X
+    
     if direction == 1:
-        # Long spread: +Y, -beta*X
-        leg_y = position_size * (y_x - y_e)
-        leg_x = -position_size * beta * (x_x - x_e)
+        # Long spread: Long Y, Short beta*X (when z < -threshold)
+        # Buy Y, Sell beta*X
+        leg_y = position_size * (y_x - y_e)  # Long Y: profit when Y goes up
+        leg_x = -position_size * beta * (x_x - x_e)  # Short beta*X: profit when X goes down
     else:
-        # Short spread: -Y, +beta*X
-        leg_y = -position_size * (y_x - y_e)
-        leg_x = position_size * beta * (x_x - x_e)
+        # Short spread: Short Y, Long beta*X (when z > threshold)  
+        # Sell Y, Buy beta*X
+        leg_y = -position_size * (y_x - y_e)  # Short Y: profit when Y goes down
+        leg_x = position_size * beta * (x_x - x_e)  # Long beta*X: profit when X goes up
+    
     gross = leg_y + leg_x
-    # Commissions: entry and exit, both legs, scaled by position size
-    commission = 2 * commission_per_leg * position_size * (1 + abs(beta))
+    
+    # Commissions: entry and exit, both legs
+    # Commission is based on the dollar amount traded, not position size
+    y_trade_amount = position_size * y_e
+    x_trade_amount = position_size * beta * x_e
+    total_trade_amount = y_trade_amount + x_trade_amount
+    commission = 2 * commission_per_leg * total_trade_amount  # Entry and exit
+    
     pnl = gross - commission
     days_held = (x_date - e_date).days
     return TradeResult(

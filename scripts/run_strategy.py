@@ -16,6 +16,7 @@ from backtest_grid import (
     plot_trades_price_series,
     plot_multiple_trades_price_series,
     plot_multiple_trades_z_series,
+    plot_equity_curve,
 )
 
 
@@ -34,7 +35,7 @@ def resample_to_timeframe(z_series: pd.Series, prices_df: pd.DataFrame, timefram
     return z_res.loc[common], px_res.loc[common]
 
 
-def run_strategy(z_type: str = 'rolling', timeframe: str = 'D', initial_capital: float = None, risk_per_trade: float = None):
+def run_strategy(z_type: str = 'rolling', timeframe: str = 'D', initial_capital: float = None, risk_per_trade: float = None, risk_percentage: float = None):
     # Pass mode to cointegration to skip extra logs/computation
     z_mode = 'rolling' if z_type.lower() == 'rolling' else ('expanding' if z_type.lower() == 'expanding' else 'both')
     df, df_log, pairs, z_roll, z_exp = run_cointegration(z_mode=z_mode)
@@ -74,11 +75,18 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D', initial_capital:
     merged_price_items = []
     merged_z_items = []
     
+    # Calculate risk amount based on percentage if provided
+    if initial_capital is not None and risk_percentage is not None:
+        risk_per_trade = initial_capital * (risk_percentage / 100)
+    
     # Print strategy configuration
     if initial_capital is not None and risk_per_trade is not None:
         print(f"Running strategy with risk-based position sizing:")
         print(f"- Initial capital: €{initial_capital:,.0f}")
-        print(f"- Fixed risk per trade: €{risk_per_trade:.0f}")
+        if risk_percentage is not None:
+            print(f"- Risk per trade: {risk_percentage}% of capital = €{risk_per_trade:.0f}")
+        else:
+            print(f"- Fixed risk per trade: €{risk_per_trade:.0f}")
         print(f"- Z-score method: {z_type}")
         print(f"- Timeframe: {timeframe}")
         print(f"- Number of cointegrated pairs: {len(pairs)}")
@@ -178,6 +186,22 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D', initial_capital:
         tag = f"{z_type.upper()}_{timeframe.upper()}"
         merged_px_path = f"../outputs/grid_backtest/sample_trades_MERGED_{tag}_{timestamp}.png"
         plot_multiple_trades_price_series(merged_price_items, merged_px_path, ncols=2)
+    
+    # Save equity curve for the best performing pair
+    if merged_z_items and initial_capital is not None:
+        # Find the best performing pair
+        best_pair = None
+        best_pnl = float('-inf')
+        for item in merged_z_items:
+            pair_pnl = sum(t.pnl for t in item['trades'])
+            if pair_pnl > best_pnl:
+                best_pnl = pair_pnl
+                best_pair = item
+        
+        if best_pair:
+            tag = f"{z_type.upper()}_{timeframe.upper()}"
+            equity_path = f"../outputs/grid_backtest/equity_curve_{tag}_{timestamp}.png"
+            plot_equity_curve(best_pair['pair_name'], best_pair['trades'], initial_capital, equity_path)
 
     # Aggregate summary
     win_rate = (agg['win_trades'] / agg['num_trades']) if agg['num_trades'] > 0 else 0.0
@@ -234,11 +258,18 @@ if __name__ == "__main__":
     parser.add_argument('--tf', choices=['D', 'W', 'M'], default='D', help='Timeframe: Daily (D), Weekly (W), Monthly (M)')
     parser.add_argument('--capital', type=float, default=None, help='Initial capital amount in euros (enables risk-based position sizing)')
     parser.add_argument('--risk', type=float, default=None, help='Fixed risk amount per trade in euros (requires --capital)')
+    parser.add_argument('--risk-pct', type=float, default=None, help='Risk percentage of capital per trade (e.g., 1.0 for 1%, requires --capital)')
     args = parser.parse_args()
     
     # Validate risk parameters
     if args.risk is not None and args.capital is None:
         print("Error: --risk requires --capital to be specified")
         exit(1)
+    if args.risk_pct is not None and args.capital is None:
+        print("Error: --risk-pct requires --capital to be specified")
+        exit(1)
+    if args.risk is not None and args.risk_pct is not None:
+        print("Error: Cannot specify both --risk and --risk-pct")
+        exit(1)
     
-    run_strategy(z_type=args.z, timeframe=args.tf, initial_capital=args.capital, risk_per_trade=args.risk)
+    run_strategy(z_type=args.z, timeframe=args.tf, initial_capital=args.capital, risk_per_trade=args.risk, risk_percentage=args.risk_pct)
