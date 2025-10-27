@@ -35,22 +35,34 @@ venv.bak/
 *.swo
 *~
 
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+outputs/
+*.log
+*.tmp
+
+# Data files (keep structure but ignore large files)
+data/*.xlsx
+data/*.csv
+!data/example_indices.csv
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Data files (keep structure but ignore large files)
-data/*.csv
-data/*.xlsx
-data/*.parquet
-!data/.gitkeep
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Outputs
-outputs/*
-!outputs/.gitkeep
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
