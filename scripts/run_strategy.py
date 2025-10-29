@@ -112,19 +112,19 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D', initial_capital:
         # Choose best z on IS; evaluate OOS with BB confirmation
         z_best, metrics_is, metrics_oos = grid_search_best_z(
             pair_name, z_series_tf, price_df_tf, x_name, y_name, alpha, beta, z_grid,
-            stop_extra=0.3, commission_per_leg=0.01, split_at_middle=True,
+            stop_extra=0.5, commission_per_leg=0.01, split_at_middle=True,
             initial_capital=initial_capital, risk_per_trade=risk_per_trade
         )
 
         mid = len(z_series_tf.dropna()) // 2
         z_oos = z_series_tf.dropna().iloc[mid:]
         price_oos = price_df_tf.iloc[mid:]
-        trades_oos_bb = simulate_pair_trades(
+        trades_oos = simulate_pair_trades(
             pair_name, z_oos, price_oos, x_name, y_name, alpha, beta, z_best,
-            stop_extra=0.3, commission_per_leg=0.01, confirm='bb',
+            stop_extra=0.5, commission_per_leg=0.01,
             initial_capital=initial_capital, risk_per_trade=risk_per_trade
         )
-        metrics_oos_bb = trades_to_metrics(trades_oos_bb)
+        metrics_oos = trades_to_metrics(trades_oos)
 
         rows.append({
             'Pair': pair_name,
@@ -134,16 +134,16 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D', initial_capital:
             'IS_netPnL': metrics_is['net_pnl'],
             'IS_Sharpe': metrics_is['sharpe'],
             'IS_trades': metrics_is['num_trades'],
-            'OOS_netPnL_BB': metrics_oos_bb['net_pnl'],
-            'OOS_Sharpe_BB': metrics_oos_bb['sharpe'],
-            'OOS_trades_BB': metrics_oos_bb['num_trades'],
+            'OOS_netPnL': metrics_oos['net_pnl'],
+            'OOS_Sharpe': metrics_oos['sharpe'],
+            'OOS_trades': metrics_oos['num_trades'],
         })
 
-        if len(trades_oos_bb) > 0 and plotted < plot_limit:
+        if len(trades_oos) > 0 and plotted < plot_limit:
             merged_z_items.append({
                 'pair_name': pair_name,
                 'z': z_oos,
-                'trades': trades_oos_bb,
+                'trades': trades_oos,
                 'z_entry': z_best,
             })
             merged_price_items.append({
@@ -153,26 +153,26 @@ def run_strategy(z_type: str = 'rolling', timeframe: str = 'D', initial_capital:
                 'y_name': y_name,
                 'alpha': alpha,
                 'beta': beta,
-                'trades': trades_oos_bb,
+                'trades': trades_oos,
             })
             plotted += 1
 
-        print(f"{pair_name}: best z={z_best:.2f}, OOS PnL(BB)={metrics_oos_bb['net_pnl']:.1f}, Sharpe={metrics_oos_bb['sharpe']:.2f}")
+        print(f"{pair_name}: best z={z_best:.2f}, OOS PnL={metrics_oos['net_pnl']:.1f}, Sharpe={metrics_oos['sharpe']:.2f}")
 
         # Update aggregates
-        agg['net_pnl'] += metrics_oos_bb['net_pnl']
-        agg['gross_pnl'] += metrics_oos_bb['gross_pnl']
-        agg['commission'] += metrics_oos_bb['commission']
-        agg['num_trades'] += metrics_oos_bb['num_trades']
-        agg['win_trades'] += metrics_oos_bb['win_trades']
-        agg['loss_trades'] += metrics_oos_bb['loss_trades']
-        agg['total_risk'] += metrics_oos_bb.get('total_risk', 0.0)
-        agg['max_loss'] = min(agg['max_loss'], metrics_oos_bb.get('max_loss', 0.0))
-        if metrics_oos_bb['avg_win'] > 0 and metrics_oos_bb['win_trades'] > 0:
-            agg['sum_win'] += metrics_oos_bb['avg_win'] * metrics_oos_bb['win_trades']
-        if metrics_oos_bb['avg_loss'] < 0 and metrics_oos_bb['loss_trades'] > 0:
-            agg['sum_loss'] += metrics_oos_bb['avg_loss'] * metrics_oos_bb['loss_trades']
-        agg['sum_days'] += metrics_oos_bb['avg_days'] * max(metrics_oos_bb['num_trades'], 0)
+        agg['net_pnl'] += metrics_oos['net_pnl']
+        agg['gross_pnl'] += metrics_oos['gross_pnl']
+        agg['commission'] += metrics_oos['commission']
+        agg['num_trades'] += metrics_oos['num_trades']
+        agg['win_trades'] += metrics_oos['win_trades']
+        agg['loss_trades'] += metrics_oos['loss_trades']
+        agg['total_risk'] += metrics_oos.get('total_risk', 0.0)
+        agg['max_loss'] = min(agg['max_loss'], metrics_oos.get('max_loss', 0.0))
+        if metrics_oos['avg_win'] > 0 and metrics_oos['win_trades'] > 0:
+            agg['sum_win'] += metrics_oos['avg_win'] * metrics_oos['win_trades']
+        if metrics_oos['avg_loss'] < 0 and metrics_oos['loss_trades'] > 0:
+            agg['sum_loss'] += metrics_oos['avg_loss'] * metrics_oos['loss_trades']
+        agg['sum_days'] += metrics_oos['avg_days'] * max(metrics_oos['num_trades'], 0)
 
     pd.DataFrame(rows).to_csv(out_csv, index=False)
     print(f"Saved results to {out_csv}")

@@ -34,9 +34,6 @@ def simulate_pair_trades(
     z_entry: float,
     stop_extra: float = 0.5,
     commission_per_leg: float = 0.01,
-    confirm: str = 'none',  # 'none' | 'bb'
-    bb_window: int = 20,
-    bb_num_std: float = 1.0,
     initial_capital: float = None,  # If provided, enables risk-based position sizing
     risk_per_trade: float = None,   # Fixed risk amount per trade
 ) -> list:
@@ -52,20 +49,8 @@ def simulate_pair_trades(
     px_y = prices[y_name].loc[common_idx]
     px_x = prices[x_name].loc[common_idx]
 
-    # Spread series for confirmations
+    # Spread series (no confirmations)
     spread = px_y - (alpha + beta * px_x)
-    # Bollinger Bands on spread
-    if confirm == 'bb':
-        mid = spread.rolling(bb_window, min_periods=bb_window).mean()
-        vol = spread.rolling(bb_window, min_periods=bb_window).std(ddof=0)
-        upper = mid + bb_num_std * vol
-        lower = mid - bb_num_std * vol
-        # extra stop thresholds
-        upper_stop = upper + 0.5 * vol
-        lower_stop = lower - 0.5 * vol
-    else:
-        mid = vol = upper = lower = upper_stop = lower_stop = None
-    # No EMA variant retained
 
     trades: list[TradeResult] = []
     in_pos = 0
@@ -80,75 +65,37 @@ def simulate_pair_trades(
             # Entry logic: Use z-score for entry decisions
             if zi >= z_entry:
                 # Short spread when z-score is above threshold
-                # For BB confirmation, we use z-score thresholds instead of spread levels
-                ok = True
-                if confirm == 'bb':
-                    # BB confirmation: z-score must be above threshold (no additional spread check needed)
-                    # The z-score already incorporates the spread information
-                    ok = True  # z-score threshold is sufficient
-                
-                if ok:
-                    # Calculate position size if risk-based sizing is enabled
-                    if current_capital is not None and risk_per_trade is not None:
-                        position_size = calculate_position_size(
-                            px_x.iloc[i], px_y.iloc[i], beta, zi, z_entry, stop_extra, 
-                            risk_per_trade, confirm, spread.iloc[i], upper_stop.iloc[i] if confirm == 'bb' else None
-                        )
-                    in_pos = -1  # short spread
-                    entry_i = i
-                    entry_z = zi
+                # Calculate position size if risk-based sizing is enabled
+                if current_capital is not None and risk_per_trade is not None:
+                    position_size = calculate_position_size(
+                        px_x.iloc[i], px_y.iloc[i], beta, zi, z_entry, stop_extra,
+                        risk_per_trade, spread.iloc[i]
+                    )
+                in_pos = -1  # short spread
+                entry_i = i
+                entry_z = zi
                     
             elif zi <= -z_entry:
                 # Long spread when z-score is below negative threshold
-                # For BB confirmation, we use z-score thresholds instead of spread levels
-                ok = True
-                if confirm == 'bb':
-                    # BB confirmation: z-score must be below threshold (no additional spread check needed)
-                    # The z-score already incorporates the spread information
-                    ok = True  # z-score threshold is sufficient
-                
-                if ok:
-                    # Calculate position size if risk-based sizing is enabled
-                    if current_capital is not None and risk_per_trade is not None:
-                        position_size = calculate_position_size(
-                            px_x.iloc[i], px_y.iloc[i], beta, zi, z_entry, stop_extra, 
-                            risk_per_trade, confirm, spread.iloc[i], lower_stop.iloc[i] if confirm == 'bb' else None
-                        )
-                    in_pos = 1   # long spread
-                    entry_i = i
-                    entry_z = zi
+                # Calculate position size if risk-based sizing is enabled
+                if current_capital is not None and risk_per_trade is not None:
+                    position_size = calculate_position_size(
+                        px_x.iloc[i], px_y.iloc[i], beta, zi, z_entry, stop_extra,
+                        risk_per_trade, spread.iloc[i]
+                    )
+                in_pos = 1   # long spread
+                entry_i = i
+                entry_z = zi
         else:
             # stop-loss: 0.5 z-score move in opposite direction
             stop_hit = False
-            if confirm == 'bb':
-                # For BB confirmation, use both z-score and spread-based stops
-                z_stop_hit = False
-                bb_stop_hit = False
-                
-                # Z-score based stop: 0.5 z-score move in opposite direction
-                if in_pos == 1:  # Long position
-                    # Stop when z-score moves 0.5 in opposite direction (more negative)
-                    z_stop_hit = zi <= (entry_z - 0.5)
-                elif in_pos == -1:  # Short position  
-                    # Stop when z-score moves 0.5 in opposite direction (more positive)
-                    z_stop_hit = zi >= (entry_z + 0.5)
-                
-                # BB-based stop (additional confirmation)
-                if in_pos == 1 and (not pd.isna(lower_stop.iloc[i])) and spread.iloc[i] <= lower_stop.iloc[i]:
-                    bb_stop_hit = True
-                elif in_pos == -1 and (not pd.isna(upper_stop.iloc[i])) and spread.iloc[i] >= upper_stop.iloc[i]:
-                    bb_stop_hit = True
-                
-                # Stop if either z-score or BB stop is hit
-                stop_hit = z_stop_hit or bb_stop_hit
-            else:
-                # For non-BB mode, use only z-score based stops
-                if in_pos == 1:  # Long position
-                    # Stop when z-score moves 0.5 in opposite direction (more negative)
-                    stop_hit = zi <= (entry_z - 0.5)
-                elif in_pos == -1:  # Short position
-                    # Stop when z-score moves 0.5 in opposite direction (more positive)
-                    stop_hit = zi >= (entry_z + 0.5)
+            # Use only z-score based stops
+            if in_pos == 1:  # Long position
+                # Stop when z-score moves 0.5 in opposite direction (more negative)
+                stop_hit = zi <= (entry_z - 0.5)
+            elif in_pos == -1:  # Short position
+                # Stop when z-score moves 0.5 in opposite direction (more positive)
+                stop_hit = zi >= (entry_z + 0.5)
             if stop_hit:
                 exit_i = i
                 trade_result = _close_trade(pair_name, in_pos, entry_i, exit_i, entry_z, zi, z, px_x, px_y, beta, commission_per_leg, position_size, risk_per_trade)
@@ -177,7 +124,7 @@ def simulate_pair_trades(
     return trades
 
 
-def calculate_position_size(px_x, px_y, beta, entry_z, z_entry, stop_extra, risk_amount, confirm, spread, stop_level):
+def calculate_position_size(px_x, px_y, beta, entry_z, z_entry, stop_extra, risk_amount, spread):
     """
     Calculate position size using simple approach similar to the article.
     
@@ -316,27 +263,15 @@ def plot_trades_price_series(
     output_path: str,
 ):
     """
-    Save a plot of the spread price series with entry/exit markers and Bollinger Bands.
+    Save a plot of the spread price series with entry/exit markers (no Bollinger Bands).
     """
     common_idx = prices.index
     spread = prices[y_name].loc[common_idx] - (alpha + beta * prices[x_name].loc[common_idx])
     
     plt.figure(figsize=(16, 10))
     
-    # Calculate Bollinger Bands for visualization
-    bb_window = 20
-    bb_num_std = 1.0
-    mid = spread.rolling(bb_window, min_periods=bb_window).mean()
-    vol = spread.rolling(bb_window, min_periods=bb_window).std(ddof=0)
-    upper = mid + bb_num_std * vol
-    lower = mid - bb_num_std * vol
-    
-    # Plot spread and Bollinger Bands
+    # Plot spread only
     plt.plot(spread.index, spread.values, label='Spread (Y - (α + β·X))', color='tab:purple', linewidth=1.5, alpha=0.8)
-    plt.plot(mid.index, mid.values, label='BB Middle (20-day MA)', color='orange', linewidth=1.5, alpha=0.8)
-    plt.fill_between(upper.index, upper.values, lower.values, alpha=0.2, color='gray', label='BB Bands (±1σ)')
-    plt.plot(upper.index, upper.values, color='red', linewidth=1.5, alpha=0.8, linestyle='--')
-    plt.plot(lower.index, lower.values, color='green', linewidth=1.5, alpha=0.8, linestyle='--')
     
     # Mark entries/exits with better visualization
     for t in trades:
@@ -375,7 +310,7 @@ def plot_trades_price_series(
     total_pnl = sum(t.pnl for t in trades)
     avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
     
-    plt.title(f'{pair_name} — Spread with Bollinger Bands and Trading Signals\n'
+    plt.title(f'{pair_name} — Spread and Trading Signals\n'
               f'Trades: {total_trades} | Win Rate: {win_rate:.1f}% | Total PnL: {total_pnl:.0f} | Avg PnL: {avg_pnl:.0f}', 
               fontsize=14, fontweight='bold')
     plt.xlabel('Date', fontsize=12)
